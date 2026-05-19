@@ -8,6 +8,7 @@ from app.models.payment import Payment
 from app.models.budget import BudgetItem
 from app.models.audit import AuditLog
 from app.models.announcement import Announcement
+from app.models.payment_allocation import PaymentAllocation
 
 __all__ = [
     "Community", "Unit", "User",
@@ -15,5 +16,5 @@ __all__ = [
     "UserCommunityRole",
     "ChargeType", "Charge",
     "Payment", "BudgetItem",
-    "AuditLog", "Announcement",
+    "AuditLog", "Announcement", "PaymentAllocation"
 ]

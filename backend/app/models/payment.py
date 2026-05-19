@@ -20,3 +20,4 @@ class Payment(Base):
 
     unit: Mapped["Unit"] = relationship(back_populates="payments")
     creator: Mapped["User"] = relationship()
+    allocations: Mapped[list["PaymentAllocation"]] = relationship(back_populates="payment")

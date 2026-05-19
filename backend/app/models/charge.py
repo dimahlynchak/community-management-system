@@ -42,3 +42,4 @@ class Charge(Base):
     unit: Mapped["Unit"] = relationship(back_populates="charges")
     charge_type: Mapped["ChargeType"] = relationship(back_populates="charges")
     creator: Mapped["User"] = relationship()
+    allocations: Mapped[list["PaymentAllocation"]] = relationship(back_populates="charge")
