@@ -23,8 +23,6 @@ class UserResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
-
-
 class TokenResponse(BaseModel):
     """Схема відповіді з токенами."""
     access_token: str
