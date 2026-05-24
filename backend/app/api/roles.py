@@ -3,7 +3,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.dependencies import get_current_user, require_permission, require_membership
+from app.core.dependencies import get_current_user
 from app.models.user import User
 from app.models.user_community_role import UserCommunityRole
 from app.schemas.role import AssignRoleRequest, UserRoleResponse, RoleResponse
@@ -33,7 +33,7 @@ def assign_member_role(
     community_id: int,
     data: AssignRoleRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_permission("users:manage")),
+    current_user: User = Depends(get_current_user),
 ):
     """Призначити роль користувачу в спільноті."""
     if get_community(db, community_id) is None:
@@ -57,7 +57,7 @@ def assign_member_role(
 def list_members(
     community_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_membership),
+    current_user: User = Depends(get_current_user),
 ):
     """Отримати учасників спільноти з ролями."""
     return get_community_members(db, community_id)
@@ -71,7 +71,7 @@ def remove_member(
     community_id: int,
     user_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_permission("users:manage")),
+    current_user: User = Depends(get_current_user),
 ):
     """Видалити роль користувача зі спільноти."""
     ucr = db.query(UserCommunityRole).filter(

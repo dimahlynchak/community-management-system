@@ -36,68 +36,44 @@ def get_current_user(
     return user
 
 
-def get_user_permissions(db: Session, user_id: int, community_id: int) -> set[str]:
-    """Усі дозволи користувача в конкретній спільноті (з ієрархією ролей)."""
-    from app.models.role import Role
-    from app.models.user_community_role import UserCommunityRole
-
-    ucr = db.query(UserCommunityRole).filter(
-        UserCommunityRole.user_id == user_id,
-        UserCommunityRole.community_id == community_id,
-    ).first()
-    if ucr is None:
-        return set()
-
-    permissions: set[str] = set()
-    role = db.query(Role).filter(Role.id == ucr.role_id).first()
-    while role is not None:
-        for perm in role.permissions:
-            permissions.add(perm.codename)
-        role = (
-            db.query(Role).filter(Role.id == role.parent_role_id).first()
-            if role.parent_role_id else None
-        )
-    return permissions
-
-
-def check_permission(db: Session, user_id: int, community_id: int, codename: str) -> None:
-    """Кидає 403, якщо користувач не має дозволу в цій спільноті."""
-    if codename not in get_user_permissions(db, user_id, community_id):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Permission '{codename}' required",
-        )
-
-
 def require_permission(permission_codename: str):
-    """Dependency factory: перевіряє дозвіл у спільноті з шляху (community-scoped)."""
+    """Dependency factory: перевіряє чи має користувач певний дозвіл (з урахуванням ієрархії ролей)."""
 
     def _check(
-        community_id: int,
         current_user: User = Depends(get_current_user),
         db: Session = Depends(get_db),
     ) -> User:
-        check_permission(db, current_user.id, community_id, permission_codename)
+        from app.models.role import Role
+        from app.models.user_community_role import UserCommunityRole
+
+        # Отримуємо роль користувача (поки що — перша спільнота)
+        ucr = db.query(UserCommunityRole).filter(
+            UserCommunityRole.user_id == current_user.id
+        ).first()
+
+        if ucr is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No role assigned",
+            )
+
+        # Збираємо всі дозволи по ієрархії ролей
+        all_permissions: set[str] = set()
+        role = db.query(Role).filter(Role.id == ucr.role_id).first()
+
+        while role is not None:
+            for perm in role.permissions:
+                all_permissions.add(perm.codename)
+            if role.parent_role_id:
+                role = db.query(Role).filter(Role.id == role.parent_role_id).first()
+            else:
+                role = None
+
+        if permission_codename not in all_permissions:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Permission '{permission_codename}' required",
+            )
         return current_user
 
     return _check
-
-
-def require_membership(
-    community_id: int,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-) -> User:
-    """Dependency: користувач має будь-яку роль у цій спільноті."""
-    from app.models.user_community_role import UserCommunityRole
-
-    ucr = db.query(UserCommunityRole).filter(
-        UserCommunityRole.user_id == current_user.id,
-        UserCommunityRole.community_id == community_id,
-    ).first()
-    if ucr is None:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not a member of this community",
-        )
-    return current_user
