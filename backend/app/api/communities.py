@@ -3,18 +3,19 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
 from app.core.database import get_db
-from app.core.dependencies import get_current_user, require_permission
+from app.core.dependencies import get_current_user, require_permission, require_membership
 from app.models.user import User
 from app.schemas.community import (
     CommunityCreate, CommunityUpdate, CommunityResponse,
     UnitCreate, UnitUpdate, UnitResponse,
 )
 from app.services.community import (
-    create_community, get_communities, get_community,
+    create_community, get_communities_for_user, get_community,
     update_community, delete_community,
     create_unit, get_units_by_community, get_unit,
     update_unit, delete_unit,
 )
+from app.services.role import assign_role
 from app.services.audit import create_audit_entry
 from fastapi import Request
 
@@ -31,17 +32,19 @@ def create(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Створити нову спільноту (ОСББ)."""
+    """Створити нову спільноту (ОСББ). Творець стає головою правління."""
     try:
         community = create_community(db, data)
-        create_audit_entry(
-            db, current_user.id, community.id, "CREATE", "community", community.id,
-            details=data.model_dump(), ip_address=request.client.host,
-        )
-        return community
     except IntegrityError:
         db.rollback()
         raise HTTPException(status_code=409, detail="Community already exists")
+
+    assign_role(db, current_user.id, community.id, "head", None)
+    create_audit_entry(
+        db, current_user.id, community.id, "CREATE", "community", community.id,
+        details=data.model_dump(), ip_address=request.client.host,
+    )
+    return community
 
 
 @router.get("/", response_model=list[CommunityResponse])
@@ -49,15 +52,15 @@ def list_all(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Отримати список усіх спільнот."""
-    return get_communities(db)
+    """Отримати спільноти, у яких користувач має роль."""
+    return get_communities_for_user(db, current_user.id)
 
 
 @router.get("/{community_id}", response_model=CommunityResponse)
 def get_one(
     community_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_membership),
 ):
     """Отримати спільноту за ID."""
     community = get_community(db, community_id)
@@ -70,27 +73,45 @@ def get_one(
 def update(
     community_id: int,
     data: CommunityUpdate,
+    request: Request,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("community:manage")),
 ):
     """Оновити дані спільноти."""
     community = get_community(db, community_id)
     if community is None:
         raise HTTPException(status_code=404, detail="Community not found")
-    return update_community(db, community, data)
+    updated = update_community(db, community, data)
+    create_audit_entry(
+        db, current_user.id, community_id, "UPDATE", "community", community_id,
+        details=data.model_dump(exclude_unset=True), ip_address=request.client.host,
+    )
+    return updated
 
 
 @router.delete("/{community_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete(
     community_id: int,
+    request: Request,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("community:manage")),
 ):
     """Видалити спільноту."""
     community = get_community(db, community_id)
     if community is None:
         raise HTTPException(status_code=404, detail="Community not found")
-    delete_community(db, community)
+    try:
+        delete_community(db, community)
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Community has related records (units, charges, members)",
+        )
+    create_audit_entry(
+        db, current_user.id, None, "DELETE", "community", community_id,
+        ip_address=request.client.host,
+    )
 
 
 # --- Units ---
@@ -100,7 +121,7 @@ def create_community_unit(
     community_id: int,
     data: UnitCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("units:manage")),
 ):
     """Додати приміщення до спільноти."""
     community = get_community(db, community_id)
@@ -116,7 +137,7 @@ def create_community_unit(
 def list_community_units(
     community_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_membership),
 ):
     """Отримати всі приміщення спільноти."""
     return get_units_by_community(db, community_id)
@@ -127,7 +148,7 @@ def get_community_unit(
     community_id: int,
     unit_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_membership),
 ):
     """Отримати приміщення за ID."""
     unit = get_unit(db, unit_id)
@@ -142,13 +163,17 @@ def update_community_unit(
     unit_id: int,
     data: UnitUpdate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("units:manage")),
 ):
     """Оновити дані приміщення."""
     unit = get_unit(db, unit_id)
     if unit is None or unit.community_id != community_id:
         raise HTTPException(status_code=404, detail="Unit not found")
-    return update_unit(db, unit, data)
+    try:
+        return update_unit(db, unit, data)
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Unit with this number already exists in community")
 
 
 @router.delete("/{community_id}/units/{unit_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -156,10 +181,14 @@ def delete_community_unit(
     community_id: int,
     unit_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("units:manage")),
 ):
     """Видалити приміщення."""
     unit = get_unit(db, unit_id)
     if unit is None or unit.community_id != community_id:
         raise HTTPException(status_code=404, detail="Unit not found")
-    delete_unit(db, unit)
+    try:
+        delete_unit(db, unit)
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Unit has related charges or payments")

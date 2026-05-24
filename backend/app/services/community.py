@@ -2,6 +2,7 @@ from sqlalchemy.orm import Session
 
 from app.models.community import Community
 from app.models.unit import Unit
+from app.models.user_community_role import UserCommunityRole
 from app.schemas.community import CommunityCreate, CommunityUpdate, UnitCreate, UnitUpdate
 
 
@@ -15,6 +16,15 @@ def create_community(db: Session, data: CommunityCreate) -> Community:
 
 def get_communities(db: Session) -> list[Community]:
     return db.query(Community).all()
+
+
+def get_communities_for_user(db: Session, user_id: int) -> list[Community]:
+    return (
+        db.query(Community)
+        .join(UserCommunityRole, UserCommunityRole.community_id == Community.id)
+        .filter(UserCommunityRole.user_id == user_id)
+        .all()
+    )
 
 
 def get_community(db: Session, community_id: int) -> Community | None:
