@@ -69,6 +69,8 @@ def generate_charges(
         return create_charges_for_community(
             db, community_id, data.charge_type_id, data.period, current_user.id,
         )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except IntegrityError:
         db.rollback()
         raise HTTPException(status_code=409, detail="Charges for this period already exist")

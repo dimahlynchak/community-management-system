@@ -1,7 +1,11 @@
+import re
 from datetime import date, datetime
 from decimal import Decimal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
+
+_PERIOD_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
+_VALID_METHODS = {"per_sqm", "fixed", "share"}
 
 
 # --- ChargeTypes ---
@@ -10,6 +14,20 @@ class ChargeTypeCreate(BaseModel):
     name: str
     calculation_method: str  # per_sqm / fixed / share
     rate: Decimal
+
+    @field_validator("calculation_method")
+    @classmethod
+    def _validate_method(cls, v: str) -> str:
+        if v not in _VALID_METHODS:
+            raise ValueError(f"calculation_method must be one of {sorted(_VALID_METHODS)}")
+        return v
+
+    @field_validator("rate")
+    @classmethod
+    def _validate_rate(cls, v: Decimal) -> Decimal:
+        if v < 0:
+            raise ValueError("rate must be >= 0")
+        return v
 
 
 class ChargeTypeResponse(BaseModel):
@@ -29,6 +47,13 @@ class ChargeTypeResponse(BaseModel):
 class ChargeCreate(BaseModel):
     charge_type_id: int
     period: str  # YYYY-MM
+
+    @field_validator("period")
+    @classmethod
+    def _validate_period(cls, v: str) -> str:
+        if not _PERIOD_RE.match(v):
+            raise ValueError("period must be in format YYYY-MM")
+        return v
 
 
 class ChargeResponse(BaseModel):
@@ -50,6 +75,13 @@ class PaymentCreate(BaseModel):
     amount: Decimal
     payment_date: date
     description: str | None = None
+
+    @field_validator("amount")
+    @classmethod
+    def _validate_amount(cls, v: Decimal) -> Decimal:
+        if v <= 0:
+            raise ValueError("amount must be > 0")
+        return v
 
 
 class PaymentResponse(BaseModel):
@@ -73,6 +105,13 @@ class BudgetItemCreate(BaseModel):
     actual_amount: Decimal | None = None
     description: str | None = None
     document_ref: str | None = None
+
+    @field_validator("period")
+    @classmethod
+    def _validate_period(cls, v: str) -> str:
+        if not _PERIOD_RE.match(v):
+            raise ValueError("period must be in format YYYY-MM")
+        return v
 
 
 class BudgetItemResponse(BaseModel):

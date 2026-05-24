@@ -30,48 +30,51 @@ def get_charge_types(db: Session, community_id: int) -> list[ChargeType]:
 
 # --- Charges ---
 
-def calculate_amount(unit: Unit, charge_type: ChargeType) -> Decimal:
-    """Розрахунок суми нарахування: C_i = A_i × R_j."""
-    if charge_type.calculation_method == "per_sqm":
-        return unit.area * charge_type.rate
-    elif charge_type.calculation_method == "fixed":
-        return charge_type.rate
-    elif charge_type.calculation_method == "share":
-        # Рівний розподіл між усіма юнітами спільноти
-        return charge_type.rate
-    return Decimal("0.00")
-
-
-def create_charge_for_unit(
-    db: Session, unit_id: int, charge_type_id: int, period: str, user_id: int,
-) -> Charge:
-    """Створює нарахування для одного юніта."""
-    unit = db.query(Unit).filter(Unit.id == unit_id).first()
-    charge_type = db.query(ChargeType).filter(ChargeType.id == charge_type_id).first()
-
-    amount = calculate_amount(unit, charge_type)
-    charge = Charge(
-        unit_id=unit_id,
-        charge_type_id=charge_type_id,
-        period=period,
-        amount=amount,
-        created_by=user_id,
-    )
-    db.add(charge)
-    db.commit()
-    db.refresh(charge)
-    return charge
+def calculate_amount(unit: Unit, charge_type: ChargeType, unit_count: int) -> Decimal:
+    """Розрахунок суми нарахування за методом тарифу."""
+    method = charge_type.calculation_method
+    if method == "per_sqm":
+        return (unit.area * charge_type.rate).quantize(Decimal("0.01"))
+    if method == "fixed":
+        return charge_type.rate.quantize(Decimal("0.01"))
+    if method == "share":
+        # Рівний розподіл загальної суми між усіма юнітами спільноти
+        if unit_count == 0:
+            return Decimal("0.00")
+        return (charge_type.rate / unit_count).quantize(Decimal("0.01"))
+    raise ValueError(f"Unknown calculation_method: {method}")
 
 
 def create_charges_for_community(
     db: Session, community_id: int, charge_type_id: int, period: str, user_id: int,
 ) -> list[Charge]:
-    """Масове нарахування для всіх юнітів спільноти."""
+    """Масове нарахування для всіх юнітів спільноти (атомарно, одна транзакція)."""
+    charge_type = db.query(ChargeType).filter(ChargeType.id == charge_type_id).first()
+    if charge_type is None:
+        raise ValueError("Charge type not found")
+    if charge_type.community_id != community_id:
+        raise ValueError("Charge type does not belong to this community")
+
     units = db.query(Unit).filter(Unit.community_id == community_id).all()
-    charges = []
+    if not units:
+        return []
+
+    unit_count = len(units)
+    charges: list[Charge] = []
     for unit in units:
-        charge = create_charge_for_unit(db, unit.id, charge_type_id, period, user_id)
+        amount = calculate_amount(unit, charge_type, unit_count)
+        charge = Charge(
+            unit_id=unit.id,
+            charge_type_id=charge_type_id,
+            period=period,
+            amount=amount,
+            created_by=user_id,
+        )
+        db.add(charge)
         charges.append(charge)
+    db.commit()
+    for charge in charges:
+        db.refresh(charge)
     return charges
 
 
