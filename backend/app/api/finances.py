@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -11,6 +11,7 @@ from app.schemas.finance import (
     PaymentCreate, PaymentResponse,
     BudgetItemCreate, BudgetItemResponse,
 )
+from app.services.audit import create_audit_entry
 from app.services.finance import (
     create_charge_type, get_charge_types,
     create_charges_for_community, get_charges_by_community,
@@ -59,6 +60,7 @@ def list_types(
 def generate_charges(
     community_id: int,
     data: ChargeCreate,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("charges:create")),
 ):
@@ -66,7 +68,7 @@ def generate_charges(
     if get_community(db, community_id) is None:
         raise HTTPException(status_code=404, detail="Community not found")
     try:
-        return create_charges_for_community(
+        charges = create_charges_for_community(
             db, community_id, data.charge_type_id, data.period, current_user.id,
         )
     except ValueError as e:
@@ -74,6 +76,12 @@ def generate_charges(
     except IntegrityError:
         db.rollback()
         raise HTTPException(status_code=409, detail="Charges for this period already exist")
+    create_audit_entry(
+        db, current_user.id, community_id, "CREATE", "charge", None,
+        details={"charge_type_id": data.charge_type_id, "period": data.period, "count": len(charges)},
+        ip_address=request.client.host,
+    )
+    return charges
 
 
 @router.get("/charges", response_model=list[ChargeResponse])
@@ -93,6 +101,7 @@ def list_charges(
 def add_payment(
     community_id: int,
     data: PaymentCreate,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("payments:create")),
 ):
@@ -100,7 +109,13 @@ def add_payment(
     if get_community(db, community_id) is None:
         raise HTTPException(status_code=404, detail="Community not found")
     _ensure_unit_in_community(db, data.unit_id, community_id)
-    return create_payment(db, data, current_user.id)
+    payment = create_payment(db, data, current_user.id)
+    create_audit_entry(
+        db, current_user.id, community_id, "CREATE", "payment", payment.id,
+        details={"unit_id": data.unit_id, "amount": str(data.amount)},
+        ip_address=request.client.host,
+    )
+    return payment
 
 
 @router.get("/payments", response_model=list[PaymentResponse])
@@ -121,13 +136,20 @@ def list_payments(
 def add_budget_item(
     community_id: int,
     data: BudgetItemCreate,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("budget:manage")),
 ):
     """Додати статтю бюджету."""
     if get_community(db, community_id) is None:
         raise HTTPException(status_code=404, detail="Community not found")
-    return create_budget_item(db, community_id, data, current_user.id)
+    item = create_budget_item(db, community_id, data, current_user.id)
+    create_audit_entry(
+        db, current_user.id, community_id, "CREATE", "budget_item", item.id,
+        details={k: str(v) if v is not None else None for k, v in data.model_dump().items()},
+        ip_address=request.client.host,
+    )
+    return item
 
 
 @router.get("/budget", response_model=list[BudgetItemResponse])

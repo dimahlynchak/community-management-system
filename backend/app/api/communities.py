@@ -120,6 +120,7 @@ def delete(
 def create_community_unit(
     community_id: int,
     data: UnitCreate,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("units:manage")),
 ):
@@ -128,10 +129,15 @@ def create_community_unit(
     if community is None:
         raise HTTPException(status_code=404, detail="Community not found")
     try:
-        return create_unit(db, community_id, data)
+        unit = create_unit(db, community_id, data)
     except IntegrityError:
         db.rollback()
         raise HTTPException(status_code=409, detail="Unit with this number already exists in community")
+    create_audit_entry(
+        db, current_user.id, community_id, "CREATE", "unit", unit.id,
+        details=data.model_dump(), ip_address=request.client.host,
+    )
+    return unit
 
 @router.get("/{community_id}/units", response_model=list[UnitResponse])
 def list_community_units(
@@ -180,6 +186,7 @@ def update_community_unit(
 def delete_community_unit(
     community_id: int,
     unit_id: int,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("units:manage")),
 ):
@@ -192,3 +199,7 @@ def delete_community_unit(
     except IntegrityError:
         db.rollback()
         raise HTTPException(status_code=409, detail="Unit has related charges or payments")
+    create_audit_entry(
+        db, current_user.id, community_id, "DELETE", "unit", unit_id,
+        ip_address=request.client.host,
+    )
