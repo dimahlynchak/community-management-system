@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.dependencies import get_current_user, require_permission, require_membership
+from app.models.role import Role
 from app.models.user import User
 from app.models.user_community_role import UserCommunityRole
 from app.schemas.role import AssignRoleRequest, UserRoleResponse, RoleResponse
@@ -80,4 +81,21 @@ def remove_member(
     ).first()
     if ucr is None:
         raise HTTPException(status_code=404, detail="Member not found")
+
+    role = db.query(Role).filter(Role.id == ucr.role_id).first()
+    if role is not None and role.name == "head":
+        head_count = (
+            db.query(UserCommunityRole)
+            .join(Role, Role.id == UserCommunityRole.role_id)
+            .filter(
+                UserCommunityRole.community_id == community_id,
+                Role.name == "head",
+            )
+            .count()
+        )
+        if head_count <= 1:
+            raise HTTPException(
+                status_code=409,
+                detail="Cannot remove the last head of the community",
+            )
     remove_role(db, ucr)
