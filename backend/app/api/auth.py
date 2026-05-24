@@ -9,6 +9,8 @@ from app.core.security import decode_token
 from app.models.user import User
 from app.schemas.user import UserCreate, UserResponse, TokenResponse
 from app.services.auth import register_user, authenticate_user, create_tokens
+from app.services.audit import create_audit_entry
+
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -49,6 +51,12 @@ def login(
         samesite="lax",
         max_age=7 * 24 * 60 * 60,
     )
+
+    create_audit_entry(
+        db, user.id, None, "LOGIN", "user", user.id,
+        ip_address=form_data.username,
+    )
+
     return TokenResponse(access_token=tokens["access_token"])
 
 

@@ -15,6 +15,9 @@ from app.services.community import (
     create_unit, get_units_by_community, get_unit,
     update_unit, delete_unit,
 )
+from app.services.audit import create_audit_entry
+from fastapi import Request
+
 
 router = APIRouter(prefix="/api/communities", tags=["communities"])
 
@@ -24,12 +27,18 @@ router = APIRouter(prefix="/api/communities", tags=["communities"])
 @router.post("/", response_model=CommunityResponse, status_code=status.HTTP_201_CREATED)
 def create(
     data: CommunityCreate,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """Створити нову спільноту (ОСББ)."""
     try:
-        return create_community(db, data)
+        community = create_community(db, data)
+        create_audit_entry(
+            db, current_user.id, community.id, "CREATE", "community", community.id,
+            details=data.model_dump(), ip_address=request.client.host,
+        )
+        return community
     except IntegrityError:
         db.rollback()
         raise HTTPException(status_code=409, detail="Community already exists")
