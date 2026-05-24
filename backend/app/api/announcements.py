@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.dependencies import get_current_user
+from app.core.dependencies import require_permission, require_membership
 from app.models.user import User
 from app.schemas.announcement import AnnouncementCreate, AnnouncementResponse
 from app.services.announcement import create_announcement, get_announcements
@@ -16,7 +16,7 @@ def create(
     community_id: int,
     data: AnnouncementCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("announcements:create")),
 ):
     """Створити оголошення."""
     if get_community(db, community_id) is None:
@@ -28,7 +28,7 @@ def create(
 def list_all(
     community_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_membership),
 ):
     """Отримати оголошення спільноти."""
     return get_announcements(db, community_id)
