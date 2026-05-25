@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError  # still used for unit operations
 
 from app.core.database import get_db
 from app.core.dependencies import get_current_user, require_permission, require_membership
@@ -100,14 +100,7 @@ def delete(
     community = get_community(db, community_id)
     if community is None:
         raise HTTPException(status_code=404, detail="Community not found")
-    try:
-        delete_community(db, community)
-    except IntegrityError:
-        db.rollback()
-        raise HTTPException(
-            status_code=409,
-            detail="Community has related records (units, charges, members)",
-        )
+    delete_community(db, community)
     create_audit_entry(
         db, current_user.id, None, "DELETE", "community", community_id,
         ip_address=request.client.host,
