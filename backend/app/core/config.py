@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     COOKIE_SECURE: bool = True
     COOKIE_SAMESITE: str = "strict"
 
+    # Penalty rate: default 0.1% per day (can override in .env)
+    PENALTY_DAILY_RATE: float = 0.001
+
     class Config:
         env_file = ".env"
 

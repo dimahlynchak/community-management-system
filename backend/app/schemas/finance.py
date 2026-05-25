@@ -142,3 +142,38 @@ class BudgetItemResponse(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+# --- Allocations ---
+
+class AllocationResponse(BaseModel):
+    id: int
+    payment_id: int
+    charge_id: int
+    amount: Decimal
+
+    model_config = {"from_attributes": True}
+
+
+# --- Balance ---
+
+class UnitBalanceResponse(BaseModel):
+    unit_id: int
+    unit_number: str
+    unit_type: str
+    total_charged: Decimal
+    total_paid: Decimal
+    balance: Decimal  # positive = debt
+
+
+# --- Penalties ---
+
+class UnitPenaltyResponse(BaseModel):
+    unit_id: int
+    unit_number: str
+    charge_id: int
+    period: str
+    debt: Decimal
+    overdue_days: int
+    rate: Decimal
+    penalty: Decimal

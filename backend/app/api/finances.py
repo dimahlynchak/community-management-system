@@ -1,22 +1,35 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from datetime import date
+from decimal import Decimal
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.dependencies import require_permission, require_membership
+from app.models.payment import Payment
 from app.models.user import User
+from app.models.user_community_role import UserCommunityRole
 from app.schemas.finance import (
-    ChargeTypeCreate, ChargeTypeResponse,
-    ChargeCreate, ChargeResponse,
-    PaymentCreate, PaymentResponse,
+    AllocationResponse,
     BudgetItemCreate, BudgetItemResponse,
+    ChargeCreate, ChargeResponse,
+    ChargeTypeCreate, ChargeTypeResponse,
+    PaymentCreate, PaymentResponse,
+    UnitBalanceResponse,
+    UnitPenaltyResponse,
 )
 from app.services.audit import create_audit_entry
 from app.services.finance import (
+    calculate_penalties,
+    create_budget_item, get_budget_items,
     create_charge_type, get_charge_types,
     create_charges_for_community, get_charges_by_community,
     create_payment, get_payments_by_unit,
-    create_budget_item, get_budget_items,
+    export_balance_pdf, export_balance_xlsx,
+    get_allocations_by_payment,
+    get_balance_for_community,
+    get_my_charges,
 )
 from app.services.community import get_community, get_unit
 
@@ -38,7 +51,6 @@ def create_type(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("charge_types:manage")),
 ):
-    """Створити тип нарахування (тариф)."""
     if get_community(db, community_id) is None:
         raise HTTPException(status_code=404, detail="Community not found")
     return create_charge_type(db, community_id, data)
@@ -50,7 +62,6 @@ def list_types(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_membership),
 ):
-    """Отримати тарифи спільноти."""
     return get_charge_types(db, community_id)
 
 
@@ -64,7 +75,6 @@ def generate_charges(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("charges:create")),
 ):
-    """Масове нарахування для всіх юнітів спільноти за період."""
     if get_community(db, community_id) is None:
         raise HTTPException(status_code=404, detail="Community not found")
     try:
@@ -91,8 +101,25 @@ def list_charges(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("charges:read")),
 ):
-    """Отримати нарахування спільноти (з фільтром по періоду)."""
     return get_charges_by_community(db, community_id, period)
+
+
+# --- My charges ---
+
+@router.get("/my-charges", response_model=list[ChargeResponse])
+def my_charges(
+    community_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("own_charges:read")),
+):
+    """Нарахування поточного мешканця (за своїм юнітом)."""
+    membership = db.query(UserCommunityRole).filter(
+        UserCommunityRole.user_id == current_user.id,
+        UserCommunityRole.community_id == community_id,
+    ).first()
+    if membership is None or membership.unit_id is None:
+        raise HTTPException(status_code=404, detail="No unit assigned to your membership")
+    return get_my_charges(db, membership.unit_id)
 
 
 # --- Payments ---
@@ -105,7 +132,6 @@ def add_payment(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("payments:create")),
 ):
-    """Зареєструвати оплату."""
     if get_community(db, community_id) is None:
         raise HTTPException(status_code=404, detail="Community not found")
     _ensure_unit_in_community(db, data.unit_id, community_id)
@@ -125,9 +151,93 @@ def list_payments(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("payments:read")),
 ):
-    """Отримати оплати по приміщенню."""
     _ensure_unit_in_community(db, unit_id, community_id)
     return get_payments_by_unit(db, unit_id)
+
+
+# --- Allocations ---
+
+@router.get("/payments/{payment_id}/allocations", response_model=list[AllocationResponse])
+def payment_allocations(
+    community_id: int,
+    payment_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("payments:read")),
+):
+    """Розподіл платежу по нарахуваннях (FIFO)."""
+    payment = db.get(Payment, payment_id)
+    if payment is None:
+        raise HTTPException(status_code=404, detail="Payment not found")
+    _ensure_unit_in_community(db, payment.unit_id, community_id)
+    return get_allocations_by_payment(db, payment_id)
+
+
+# --- Balance ---
+
+@router.get("/balance", response_model=list[UnitBalanceResponse])
+def community_balance(
+    community_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("reports:generate")),
+):
+    """Боргова відомість: нараховано / оплачено / баланс по кожному юніту."""
+    if get_community(db, community_id) is None:
+        raise HTTPException(status_code=404, detail="Community not found")
+    return get_balance_for_community(db, community_id)
+
+
+# --- Balance export ---
+
+@router.get("/balance/export")
+def export_balance(
+    community_id: int,
+    format: str = Query("xlsx", description="Формат: xlsx або pdf"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("reports:generate")),
+):
+    """Вивантаження боргової відомості у форматі XLSX або PDF."""
+    community = get_community(db, community_id)
+    if community is None:
+        raise HTTPException(status_code=404, detail="Community not found")
+    if format not in ("xlsx", "pdf"):
+        raise HTTPException(status_code=400, detail="format must be 'xlsx' or 'pdf'")
+
+    balance_rows = get_balance_for_community(db, community_id)
+
+    if format == "xlsx":
+        content = export_balance_xlsx(balance_rows, community.name)
+        return Response(
+            content=content,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="balance_{community_id}.xlsx"'},
+        )
+    # pdf
+    content = export_balance_pdf(balance_rows, community.name)
+    return Response(
+        content=content,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="balance_{community_id}.pdf"'},
+    )
+
+
+# --- Penalties ---
+
+@router.get("/penalties", response_model=list[UnitPenaltyResponse])
+def community_penalties(
+    community_id: int,
+    rate: float | None = Query(None, description="Денна ставка пені (0.001 = 0.1%/день); за замовч. з config"),
+    as_of: date | None = Query(None, description="Дата розрахунку YYYY-MM-DD; за замовч. сьогодні"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("reports:generate")),
+):
+    """Розрахунок пені за прострочену заборгованість: Penalty = D × r × n."""
+    from app.core.config import settings
+    if get_community(db, community_id) is None:
+        raise HTTPException(status_code=404, detail="Community not found")
+    daily_rate = Decimal(str(rate)) if rate is not None else Decimal(str(settings.PENALTY_DAILY_RATE))
+    if daily_rate < 0:
+        raise HTTPException(status_code=400, detail="rate must be >= 0")
+    return calculate_penalties(db, community_id, daily_rate, as_of)
 
 
 # --- Budget ---
@@ -140,7 +250,6 @@ def add_budget_item(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("budget:manage")),
 ):
-    """Додати статтю бюджету."""
     if get_community(db, community_id) is None:
         raise HTTPException(status_code=404, detail="Community not found")
     item = create_budget_item(db, community_id, data, current_user.id)
@@ -159,5 +268,4 @@ def list_budget(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_membership),
 ):
-    """Отримати бюджет спільноти."""
     return get_budget_items(db, community_id, period)

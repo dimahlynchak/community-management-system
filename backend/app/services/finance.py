@@ -1,9 +1,14 @@
+import calendar
+import io
+from datetime import date
 from decimal import Decimal
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.charge import ChargeType, Charge
 from app.models.payment import Payment
+from app.models.payment_allocation import PaymentAllocation
 from app.models.budget import BudgetItem
 from app.models.unit import Unit
 from app.schemas.finance import (
@@ -31,14 +36,12 @@ def get_charge_types(db: Session, community_id: int) -> list[ChargeType]:
 # --- Charges ---
 
 def calculate_amount(unit: Unit, charge_type: ChargeType, unit_count: int) -> Decimal:
-    """Розрахунок суми нарахування за методом тарифу."""
     method = charge_type.calculation_method
     if method == "per_sqm":
         return (unit.area * charge_type.rate).quantize(Decimal("0.01"))
     if method == "fixed":
         return charge_type.rate.quantize(Decimal("0.01"))
     if method == "share":
-        # Рівний розподіл загальної суми між усіма юнітами спільноти
         if unit_count == 0:
             return Decimal("0.00")
         return (charge_type.rate / unit_count).quantize(Decimal("0.01"))
@@ -48,7 +51,6 @@ def calculate_amount(unit: Unit, charge_type: ChargeType, unit_count: int) -> De
 def create_charges_for_community(
     db: Session, community_id: int, charge_type_id: int, period: str, user_id: int,
 ) -> list[Charge]:
-    """Масове нарахування для всіх юнітів спільноти (атомарно, одна транзакція)."""
     charge_type = db.query(ChargeType).filter(ChargeType.id == charge_type_id).first()
     if charge_type is None:
         raise ValueError("Charge type not found")
@@ -91,9 +93,41 @@ def get_charges_by_community(db: Session, community_id: int, period: str | None 
 
 # --- Payments ---
 
+def _allocate_payment_fifo(db: Session, payment: Payment) -> None:
+    """FIFO: allocate payment amount to oldest outstanding charges for the unit."""
+    remaining = payment.amount
+    charges = (
+        db.query(Charge)
+        .filter(Charge.unit_id == payment.unit_id)
+        .order_by(Charge.period, Charge.created_at)
+        .all()
+    )
+    for charge in charges:
+        if remaining <= Decimal("0"):
+            break
+        already_allocated = (
+            db.query(func.sum(PaymentAllocation.amount))
+            .filter(PaymentAllocation.charge_id == charge.id)
+            .scalar()
+        ) or Decimal("0")
+        outstanding = charge.amount - already_allocated
+        if outstanding <= Decimal("0"):
+            continue
+        to_allocate = min(remaining, outstanding)
+        db.add(PaymentAllocation(
+            payment_id=payment.id,
+            charge_id=charge.id,
+            amount=to_allocate,
+        ))
+        remaining -= to_allocate
+    db.flush()
+
+
 def create_payment(db: Session, data: PaymentCreate, user_id: int) -> Payment:
     payment = Payment(**data.model_dump(), created_by=user_id)
     db.add(payment)
+    db.flush()  # get payment.id before allocating
+    _allocate_payment_fifo(db, payment)
     db.commit()
     db.refresh(payment)
     return payment
@@ -101,6 +135,192 @@ def create_payment(db: Session, data: PaymentCreate, user_id: int) -> Payment:
 
 def get_payments_by_unit(db: Session, unit_id: int) -> list[Payment]:
     return db.query(Payment).filter(Payment.unit_id == unit_id).all()
+
+
+def get_allocations_by_payment(db: Session, payment_id: int) -> list[PaymentAllocation]:
+    return db.query(PaymentAllocation).filter(PaymentAllocation.payment_id == payment_id).all()
+
+
+def get_allocations_by_charge(db: Session, charge_id: int) -> list[PaymentAllocation]:
+    return db.query(PaymentAllocation).filter(PaymentAllocation.charge_id == charge_id).all()
+
+
+# --- Balance ---
+
+def get_balance_for_community(db: Session, community_id: int) -> list[dict]:
+    units = db.query(Unit).filter(Unit.community_id == community_id).all()
+    results = []
+    for unit in units:
+        total_charged = (
+            db.query(func.sum(Charge.amount))
+            .filter(Charge.unit_id == unit.id)
+            .scalar()
+        ) or Decimal("0")
+
+        total_paid = (
+            db.query(func.sum(PaymentAllocation.amount))
+            .join(Charge, PaymentAllocation.charge_id == Charge.id)
+            .filter(Charge.unit_id == unit.id)
+            .scalar()
+        ) or Decimal("0")
+
+        results.append({
+            "unit_id": unit.id,
+            "unit_number": unit.number,
+            "unit_type": unit.type,
+            "total_charged": total_charged.quantize(Decimal("0.01")),
+            "total_paid": total_paid.quantize(Decimal("0.01")),
+            "balance": (total_charged - total_paid).quantize(Decimal("0.01")),
+        })
+    return results
+
+
+# --- Penalties ---
+
+def _last_day_of_period(period: str) -> date:
+    year, month = int(period[:4]), int(period[5:7])
+    return date(year, month, calendar.monthrange(year, month)[1])
+
+
+def calculate_penalties(
+    db: Session, community_id: int, rate: Decimal, as_of_date: date | None = None,
+) -> list[dict]:
+    if as_of_date is None:
+        as_of_date = date.today()
+
+    units = db.query(Unit).filter(Unit.community_id == community_id).all()
+    results = []
+    for unit in units:
+        charges = (
+            db.query(Charge)
+            .filter(Charge.unit_id == unit.id)
+            .order_by(Charge.period, Charge.created_at)
+            .all()
+        )
+        for charge in charges:
+            allocated = (
+                db.query(func.sum(PaymentAllocation.amount))
+                .filter(PaymentAllocation.charge_id == charge.id)
+                .scalar()
+            ) or Decimal("0")
+            debt = charge.amount - allocated
+            if debt <= Decimal("0"):
+                continue
+            last_day = _last_day_of_period(charge.period)
+            overdue_days = (as_of_date - last_day).days
+            if overdue_days <= 0:
+                continue
+            penalty = (debt * rate * overdue_days).quantize(Decimal("0.01"))
+            results.append({
+                "unit_id": unit.id,
+                "unit_number": unit.number,
+                "charge_id": charge.id,
+                "period": charge.period,
+                "debt": debt.quantize(Decimal("0.01")),
+                "overdue_days": overdue_days,
+                "rate": rate,
+                "penalty": penalty,
+            })
+    return results
+
+
+# --- My Charges ---
+
+def get_my_charges(db: Session, unit_id: int) -> list[Charge]:
+    return (
+        db.query(Charge)
+        .filter(Charge.unit_id == unit_id)
+        .order_by(Charge.period, Charge.created_at)
+        .all()
+    )
+
+
+# --- Export ---
+
+def export_balance_xlsx(balance_rows: list[dict], community_name: str) -> bytes:
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, Alignment
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Balance"
+
+    ws.merge_cells("A1:E1")
+    ws["A1"] = f"Боргова відомість: {community_name}"
+    ws["A1"].font = Font(bold=True, size=14)
+    ws["A1"].alignment = Alignment(horizontal="center")
+
+    headers = ["№ прим.", "Тип", "Нараховано (грн)", "Оплачено (грн)", "Баланс (грн)"]
+    for col, h in enumerate(headers, 1):
+        cell = ws.cell(row=2, column=col, value=h)
+        cell.font = Font(bold=True)
+
+    for i, row in enumerate(balance_rows, 3):
+        ws.cell(row=i, column=1, value=row["unit_number"])
+        ws.cell(row=i, column=2, value=row["unit_type"])
+        ws.cell(row=i, column=3, value=float(row["total_charged"]))
+        ws.cell(row=i, column=4, value=float(row["total_paid"]))
+        ws.cell(row=i, column=5, value=float(row["balance"]))
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf.read()
+
+
+def export_balance_pdf(balance_rows: list[dict], community_name: str) -> bytes:
+    from fpdf import FPDF
+
+    pdf = FPDF()
+    pdf.add_page()
+
+    # Attempt to load a system Unicode font for Cyrillic support
+    unicode_loaded = False
+    for font_path in [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",       # Linux (Debian/Ubuntu)
+        "/usr/share/fonts/dejavu/DejaVuSans.ttf",                 # Linux (Fedora)
+        "/usr/share/fonts/TTF/DejaVuSans.ttf",                    # Linux (Arch)
+        "/Library/Fonts/DejaVuSans.ttf",                          # macOS (brew)
+        "/Library/Fonts/Arial Unicode MS.ttf",                    # macOS built-in
+        "/System/Library/Fonts/Supplemental/Arial Unicode MS.ttf",# macOS Monterey+
+    ]:
+        try:
+            pdf.add_font("Unicode", fname=font_path)
+            unicode_loaded = True
+            break
+        except Exception:
+            continue
+
+    font = "Unicode" if unicode_loaded else "Helvetica"
+
+    def _text(s: str) -> str:
+        if unicode_loaded:
+            return s
+        return s.encode("latin-1", errors="replace").decode("latin-1")
+
+    pdf.set_font(font, size=14)
+    pdf.cell(0, 10, _text(f"Боргова відомість: {community_name}"), align="C")
+    pdf.ln(12)
+
+    pdf.set_font(font, size=9)
+    col_w = [28, 28, 42, 42, 38]
+    for h, w in zip(["№ прим.", "Тип", "Нараховано", "Оплачено", "Баланс (грн)"], col_w):
+        pdf.cell(w, 8, _text(h), border=1, align="C")
+    pdf.ln()
+
+    for row in balance_rows:
+        vals = [
+            str(row["unit_number"]),
+            str(row["unit_type"]),
+            str(row["total_charged"]),
+            str(row["total_paid"]),
+            str(row["balance"]),
+        ]
+        for v, w in zip(vals, col_w):
+            pdf.cell(w, 7, _text(v), border=1)
+        pdf.ln()
+
+    return bytes(pdf.output())
 
 
 # --- BudgetItems ---
