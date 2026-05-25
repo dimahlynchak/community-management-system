@@ -9,6 +9,7 @@ from app.models.budget import BudgetItem
 from app.models.audit import AuditLog
 from app.models.announcement import Announcement
 from app.models.payment_allocation import PaymentAllocation
+from app.models.refresh_token import RefreshToken
 
 __all__ = [
     "Community", "Unit", "User",
@@ -16,5 +17,6 @@ __all__ = [
     "UserCommunityRole",
     "ChargeType", "Charge",
     "Payment", "BudgetItem",
-    "AuditLog", "Announcement", "PaymentAllocation"
+    "AuditLog", "Announcement", "PaymentAllocation",
+    "RefreshToken",
 ]

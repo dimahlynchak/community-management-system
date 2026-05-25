@@ -1,4 +1,4 @@
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError
 from sqlalchemy.orm import Session
@@ -60,9 +60,21 @@ def get_user_permissions(db: Session, user_id: int, community_id: int) -> set[st
     return permissions
 
 
-def check_permission(db: Session, user_id: int, community_id: int, codename: str) -> None:
-    """Кидає 403, якщо користувач не має дозволу в цій спільноті."""
+def check_permission(
+    db: Session,
+    user_id: int,
+    community_id: int,
+    codename: str,
+    ip_address: str | None = None,
+) -> None:
+    """Кидає 403, якщо користувач не має дозволу в цій спільноті. Логує відмову."""
     if codename not in get_user_permissions(db, user_id, community_id):
+        from app.services.audit import create_audit_entry
+
+        create_audit_entry(
+            db, user_id, community_id, "ACCESS_DENIED", "permission", None,
+            details={"codename": codename}, ip_address=ip_address,
+        )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Permission '{codename}' required",
@@ -90,11 +102,15 @@ def require_permission(permission_codename: str):
 
     def _check(
         community_id: int,
+        request: Request,
         current_user: User = Depends(get_current_user),
         db: Session = Depends(get_db),
     ) -> User:
         _ensure_community_active(db, community_id)
-        check_permission(db, current_user.id, community_id, permission_codename)
+        check_permission(
+            db, current_user.id, community_id, permission_codename,
+            ip_address=request.client.host,
+        )
         return current_user
 
     return _check
@@ -102,6 +118,7 @@ def require_permission(permission_codename: str):
 
 def require_membership(
     community_id: int,
+    request: Request,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> User:
@@ -114,6 +131,12 @@ def require_membership(
         UserCommunityRole.community_id == community_id,
     ).first()
     if ucr is None:
+        from app.services.audit import create_audit_entry
+
+        create_audit_entry(
+            db, current_user.id, community_id, "ACCESS_DENIED", "membership", None,
+            ip_address=request.client.host,
+        )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not a member of this community",

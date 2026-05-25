@@ -113,6 +113,21 @@ class BudgetItemCreate(BaseModel):
             raise ValueError("period must be in format YYYY-MM")
         return v
 
+    @field_validator("category")
+    @classmethod
+    def _validate_category(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("category must not be empty")
+        return v
+
+    @field_validator("planned_amount", "actual_amount")
+    @classmethod
+    def _validate_amounts(cls, v: Decimal | None) -> Decimal | None:
+        if v is not None and v < 0:
+            raise ValueError("amount must be >= 0")
+        return v
+
 
 class BudgetItemResponse(BaseModel):
     id: int
