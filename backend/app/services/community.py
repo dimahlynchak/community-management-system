@@ -22,13 +22,13 @@ def get_communities_for_user(db: Session, user_id: int) -> list[Community]:
     return (
         db.query(Community)
         .join(UserCommunityRole, UserCommunityRole.community_id == Community.id)
-        .filter(UserCommunityRole.user_id == user_id)
+        .filter(UserCommunityRole.user_id == user_id, Community.is_active == True)
         .all()
     )
 
 
 def get_community(db: Session, community_id: int) -> Community | None:
-    return db.query(Community).filter(Community.id == community_id).first()
+    return db.query(Community).filter(Community.id == community_id, Community.is_active == True).first()
 
 
 def update_community(db: Session, community: Community, data: CommunityUpdate) -> Community:
@@ -40,7 +40,7 @@ def update_community(db: Session, community: Community, data: CommunityUpdate) -
 
 
 def delete_community(db: Session, community: Community) -> None:
-    db.delete(community)
+    community.is_active = False
     db.commit()
 
 

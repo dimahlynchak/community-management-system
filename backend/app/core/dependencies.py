@@ -69,6 +69,22 @@ def check_permission(db: Session, user_id: int, community_id: int, codename: str
         )
 
 
+def _ensure_community_active(db: Session, community_id: int) -> None:
+    """Кидає 404, якщо спільнота не існує або деактивована (soft-deleted).
+    Захищає всі вкладені ендпоїнти (units, members, finances, announcements)."""
+    from app.models.community import Community
+
+    exists = db.query(Community.id).filter(
+        Community.id == community_id,
+        Community.is_active == True,
+    ).first()
+    if exists is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Community not found",
+        )
+
+
 def require_permission(permission_codename: str):
     """Dependency factory: перевіряє дозвіл у спільноті з шляху (community-scoped)."""
 
@@ -77,6 +93,7 @@ def require_permission(permission_codename: str):
         current_user: User = Depends(get_current_user),
         db: Session = Depends(get_db),
     ) -> User:
+        _ensure_community_active(db, community_id)
         check_permission(db, current_user.id, community_id, permission_codename)
         return current_user
 
@@ -91,6 +108,7 @@ def require_membership(
     """Dependency: користувач має будь-яку роль у цій спільноті."""
     from app.models.user_community_role import UserCommunityRole
 
+    _ensure_community_active(db, community_id)
     ucr = db.query(UserCommunityRole).filter(
         UserCommunityRole.user_id == current_user.id,
         UserCommunityRole.community_id == community_id,
