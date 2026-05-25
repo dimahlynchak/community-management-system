@@ -11,6 +11,11 @@ class Settings(BaseSettings):
 
     ALGORITHM: str = "HS256"
 
+    # Безпека refresh-cookie. У проді True/strict; для локального HTTP можна
+    # виставити COOKIE_SECURE=false у .env, інакше браузер не збереже cookie.
+    COOKIE_SECURE: bool = True
+    COOKIE_SAMESITE: str = "strict"
+
     class Config:
         env_file = ".env"
 

@@ -35,9 +35,10 @@ def create(
     """Створити нову спільноту (ОСББ). Творець стає головою правління."""
     try:
         community = create_community(db, data)
-    except IntegrityError:
+    except IntegrityError as exc:
         db.rollback()
-        raise HTTPException(status_code=409, detail="Community already exists")
+        detail = "Community with this EDRPOU already exists" if "edrpou" in str(exc).lower() else "Community already exists"
+        raise HTTPException(status_code=409, detail=detail)
 
     assign_role(db, current_user.id, community.id, "head", None)
     create_audit_entry(
@@ -81,7 +82,12 @@ def update(
     community = get_community(db, community_id)
     if community is None:
         raise HTTPException(status_code=404, detail="Community not found")
-    updated = update_community(db, community, data)
+    try:
+        updated = update_community(db, community, data)
+    except IntegrityError as exc:
+        db.rollback()
+        detail = "Community with this EDRPOU already exists" if "edrpou" in str(exc).lower() else "Integrity constraint violated"
+        raise HTTPException(status_code=409, detail=detail)
     create_audit_entry(
         db, current_user.id, community_id, "UPDATE", "community", community_id,
         details=data.model_dump(exclude_unset=True), ip_address=request.client.host,
