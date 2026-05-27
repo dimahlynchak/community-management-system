@@ -196,6 +196,27 @@ def get_balance_for_community(db: Session, community_id: int) -> list[dict]:
     return results
 
 
+def get_balance_for_unit(db: Session, unit: Unit) -> dict:
+    total_charged = (
+        db.query(func.sum(Charge.amount))
+        .filter(Charge.unit_id == unit.id)
+        .scalar()
+    ) or Decimal("0")
+    total_paid = (
+        db.query(func.sum(Payment.amount))
+        .filter(Payment.unit_id == unit.id)
+        .scalar()
+    ) or Decimal("0")
+    return {
+        "unit_id": unit.id,
+        "unit_number": unit.number,
+        "unit_type": unit.type,
+        "total_charged": total_charged.quantize(Decimal("0.01")),
+        "total_paid": total_paid.quantize(Decimal("0.01")),
+        "balance": (total_paid - total_charged).quantize(Decimal("0.01")),
+    }
+
+
 # --- Penalties ---
 
 def _last_day_of_period(period: str) -> date:

@@ -28,7 +28,7 @@ from app.services.finance import (
     create_payment, get_payments_by_unit,
     export_balance_pdf, export_balance_xlsx,
     get_allocations_by_payment,
-    get_balance_for_community,
+    get_balance_for_community, get_balance_for_unit,
     get_my_charges,
 )
 from app.services.community import get_community, get_unit
@@ -111,7 +111,7 @@ def list_charges(
     return get_charges_by_community(db, community_id, period)
 
 
-# --- My charges ---
+# --- Resident self-service ---
 
 @router.get("/my-charges", response_model=list[ChargeResponse])
 def my_charges(
@@ -127,6 +127,71 @@ def my_charges(
     if membership is None or membership.unit_id is None:
         raise HTTPException(status_code=404, detail="No unit assigned to your membership")
     return get_my_charges(db, membership.unit_id)
+
+
+@router.get("/my-payments", response_model=list[PaymentResponse])
+def my_payments(
+    community_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("own_charges:read")),
+):
+    """Платежі поточного мешканця."""
+    membership = db.query(UserCommunityRole).filter(
+        UserCommunityRole.user_id == current_user.id,
+        UserCommunityRole.community_id == community_id,
+    ).first()
+    if membership is None or membership.unit_id is None:
+        raise HTTPException(status_code=404, detail="No unit assigned to your membership")
+    return get_payments_by_unit(db, membership.unit_id)
+
+
+@router.get("/my-balance", response_model=UnitBalanceResponse)
+def my_balance(
+    community_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("own_charges:read")),
+):
+    """Баланс поточного мешканця."""
+    membership = db.query(UserCommunityRole).filter(
+        UserCommunityRole.user_id == current_user.id,
+        UserCommunityRole.community_id == community_id,
+    ).first()
+    if membership is None or membership.unit_id is None:
+        raise HTTPException(status_code=404, detail="No unit assigned to your membership")
+    unit = get_unit(db, membership.unit_id)
+    return get_balance_for_unit(db, unit)
+
+
+@router.get("/my-balance/export")
+def my_balance_export(
+    community_id: int,
+    format: str = Query("xlsx", pattern="^(xlsx|pdf)$"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("own_charges:read")),
+):
+    """Експорт балансу поточного мешканця у XLSX або PDF."""
+    membership = db.query(UserCommunityRole).filter(
+        UserCommunityRole.user_id == current_user.id,
+        UserCommunityRole.community_id == community_id,
+    ).first()
+    if membership is None or membership.unit_id is None:
+        raise HTTPException(status_code=404, detail="No unit assigned to your membership")
+    unit = get_unit(db, membership.unit_id)
+    community = get_community(db, community_id)
+    row = get_balance_for_unit(db, unit)
+    if format == "xlsx":
+        content = export_balance_xlsx([row], community.name)
+        media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        filename = "my_balance.xlsx"
+    else:
+        content = export_balance_pdf([row], community.name)
+        media_type = "application/pdf"
+        filename = "my_balance.pdf"
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
 
 
 # --- Payments ---
