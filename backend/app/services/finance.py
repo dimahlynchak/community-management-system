@@ -74,6 +74,9 @@ def create_charges_for_community(
         )
         db.add(charge)
         charges.append(charge)
+    db.flush()
+    for unit in units:
+        _reallocate_unit_credit(db, unit.id)
     db.commit()
     for charge in charges:
         db.refresh(charge)
@@ -94,8 +97,15 @@ def get_charges_by_community(db: Session, community_id: int, period: str | None 
 # --- Payments ---
 
 def _allocate_payment_fifo(db: Session, payment: Payment) -> None:
-    """FIFO: allocate payment amount to oldest outstanding charges for the unit."""
-    remaining = payment.amount
+    """FIFO: allocate payment's unallocated remainder to oldest outstanding charges."""
+    already_paid = (
+        db.query(func.sum(PaymentAllocation.amount))
+        .filter(PaymentAllocation.payment_id == payment.id)
+        .scalar()
+    ) or Decimal("0")
+    remaining = payment.amount - already_paid
+    if remaining <= Decimal("0"):
+        return
     charges = (
         db.query(Charge)
         .filter(Charge.unit_id == payment.unit_id)
@@ -119,8 +129,20 @@ def _allocate_payment_fifo(db: Session, payment: Payment) -> None:
             charge_id=charge.id,
             amount=to_allocate,
         ))
+        db.flush()
         remaining -= to_allocate
-    db.flush()
+
+
+def _reallocate_unit_credit(db: Session, unit_id: int) -> None:
+    """Re-run FIFO for any payment of this unit that still has unallocated remainder."""
+    payments = (
+        db.query(Payment)
+        .filter(Payment.unit_id == unit_id)
+        .order_by(Payment.payment_date, Payment.created_at)
+        .all()
+    )
+    for payment in payments:
+        _allocate_payment_fifo(db, payment)
 
 
 def create_payment(db: Session, data: PaymentCreate, user_id: int) -> Payment:
