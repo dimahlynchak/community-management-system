@@ -158,9 +158,8 @@ def get_balance_for_community(db: Session, community_id: int) -> list[dict]:
         ) or Decimal("0")
 
         total_paid = (
-            db.query(func.sum(PaymentAllocation.amount))
-            .join(Charge, PaymentAllocation.charge_id == Charge.id)
-            .filter(Charge.unit_id == unit.id)
+            db.query(func.sum(Payment.amount))
+            .filter(Payment.unit_id == unit.id)
             .scalar()
         ) or Decimal("0")
 
@@ -170,7 +169,7 @@ def get_balance_for_community(db: Session, community_id: int) -> list[dict]:
             "unit_type": unit.type,
             "total_charged": total_charged.quantize(Decimal("0.01")),
             "total_paid": total_paid.quantize(Decimal("0.01")),
-            "balance": (total_charged - total_paid).quantize(Decimal("0.01")),
+            "balance": (total_paid - total_charged).quantize(Decimal("0.01")),
         })
     return results
 
