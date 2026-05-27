@@ -167,6 +167,7 @@ def update_community_unit(
     community_id: int,
     unit_id: int,
     data: UnitUpdate,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("units:manage")),
 ):
@@ -175,10 +176,16 @@ def update_community_unit(
     if unit is None or unit.community_id != community_id:
         raise HTTPException(status_code=404, detail="Unit not found")
     try:
-        return update_unit(db, unit, data)
+        updated = update_unit(db, unit, data)
     except IntegrityError:
         db.rollback()
         raise HTTPException(status_code=409, detail="Unit with this number already exists in community")
+    create_audit_entry(
+        db, current_user.id, community_id, "UPDATE", "unit", unit_id,
+        details=data.model_dump(exclude_unset=True),
+        ip_address=request.client.host,
+    )
+    return updated
 
 
 @router.delete("/{community_id}/units/{unit_id}", status_code=status.HTTP_204_NO_CONTENT)
