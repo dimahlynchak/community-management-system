@@ -48,12 +48,19 @@ def _ensure_unit_in_community(db: Session, unit_id: int, community_id: int) -> N
 def create_type(
     community_id: int,
     data: ChargeTypeCreate,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("charge_types:manage")),
 ):
     if get_community(db, community_id) is None:
         raise HTTPException(status_code=404, detail="Community not found")
-    return create_charge_type(db, community_id, data)
+    charge_type = create_charge_type(db, community_id, data)
+    create_audit_entry(
+        db, current_user.id, community_id, "CREATE", "charge_type", charge_type.id,
+        details={"name": data.name, "calculation_method": data.calculation_method, "rate": str(data.rate)},
+        ip_address=request.client.host,
+    )
+    return charge_type
 
 
 @router.get("/charge-types", response_model=list[ChargeTypeResponse])
