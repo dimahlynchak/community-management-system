@@ -274,15 +274,20 @@ def export_balance_pdf(balance_rows: list[dict], community_name: str) -> bytes:
     pdf = FPDF()
     pdf.add_page()
 
-    # Attempt to load a system Unicode font for Cyrillic support
+    import os
+    bundled_font = os.path.join(
+        os.path.dirname(os.path.dirname(__file__)),
+        "assets", "fonts", "DejaVuSans.ttf",
+    )
     unicode_loaded = False
     for font_path in [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",       # Linux (Debian/Ubuntu)
-        "/usr/share/fonts/dejavu/DejaVuSans.ttf",                 # Linux (Fedora)
-        "/usr/share/fonts/TTF/DejaVuSans.ttf",                    # Linux (Arch)
-        "/Library/Fonts/DejaVuSans.ttf",                          # macOS (brew)
-        "/Library/Fonts/Arial Unicode MS.ttf",                    # macOS built-in
-        "/System/Library/Fonts/Supplemental/Arial Unicode MS.ttf",# macOS Monterey+
+        bundled_font,
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        "/Library/Fonts/DejaVuSans.ttf",
+        "/Library/Fonts/Arial Unicode MS.ttf",
+        "/System/Library/Fonts/Supplemental/Arial Unicode MS.ttf",
     ]:
         try:
             pdf.add_font("Unicode", fname=font_path)
