@@ -1,25 +1,40 @@
-import { Routes, Route } from 'react-router-dom';
-import { Building2 } from 'lucide-react';
+import { Route, Routes } from 'react-router-dom';
+import ProtectedRoute from './auth/ProtectedRoute';
+import Layout from './components/Layout';
+import Login from './pages/auth/Login';
+import Register from './pages/auth/Register';
+import Home from './pages/Home';
+import NotFound from './pages/NotFound';
 
 export default function App() {
-  return (
-      <Routes>
-        <Route path="*" element={<Home />} />
-      </Routes>
-  );
+    return (
+        <Routes>
+            <Route path="/login" element={<Login />} />
+            <Route path="/register" element={<Register />} />
+            <Route
+                element={
+                    <ProtectedRoute>
+                        <Layout />
+                    </ProtectedRoute>
+                }
+            >
+                <Route path="/" element={<Home />} />
+                <Route path="/communities" element={<CommunitiesPlaceholder />} />
+                <Route path="*" element={<NotFound />} />
+            </Route>
+        </Routes>
+    );
 }
 
-function Home() {
-  return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="card max-w-md w-full mx-4">
-          <div className="card-body text-center space-y-3">
-            <Building2 className="text-brand-600 mx-auto" size={40} />
-            <h1 className="text-2xl font-semibold text-slate-900">
-              ОСББ — система управління
-            </h1>
-          </div>
+function CommunitiesPlaceholder() {
+    return (
+        <div className="card max-w-2xl">
+            <div className="card-body space-y-2">
+                <h2 className="text-lg font-semibold text-slate-900">Спільноти</h2>
+                <p className="text-sm text-slate-600">
+                    Розділ реалізується наступним кроком розробки.
+                </p>
+            </div>
         </div>
-      </div>
-  );
+    );
 }
