@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError  # still used for unit operations
 
 from app.core.database import get_db
-from app.core.dependencies import get_current_user, require_permission, require_membership
+from app.core.dependencies import get_current_user, require_permission, require_membership, get_client_ip
 from app.models.user import User
 from app.schemas.community import (
     CommunityCreate, CommunityUpdate, CommunityResponse,
@@ -43,7 +43,7 @@ def create(
     assign_role(db, current_user.id, community.id, "head", None)
     create_audit_entry(
         db, current_user.id, community.id, "CREATE", "community", community.id,
-        details=data.model_dump(), ip_address=request.client.host,
+        details=data.model_dump(), ip_address=get_client_ip(request),
     )
     return community
 
@@ -90,7 +90,7 @@ def update(
         raise HTTPException(status_code=409, detail=detail)
     create_audit_entry(
         db, current_user.id, community_id, "UPDATE", "community", community_id,
-        details=data.model_dump(exclude_unset=True), ip_address=request.client.host,
+        details=data.model_dump(exclude_unset=True), ip_address=get_client_ip(request),
     )
     return updated
 
@@ -108,8 +108,8 @@ def delete(
         raise HTTPException(status_code=404, detail="Community not found")
     delete_community(db, community)
     create_audit_entry(
-        db, current_user.id, None, "DELETE", "community", community_id,
-        ip_address=request.client.host,
+        db, current_user.id, community_id, "DELETE", "community", community_id,
+        ip_address=get_client_ip(request),
     )
 
 
@@ -134,7 +134,7 @@ def create_community_unit(
         raise HTTPException(status_code=409, detail="Unit with this number already exists in community")
     create_audit_entry(
         db, current_user.id, community_id, "CREATE", "unit", unit.id,
-        details=data.model_dump(), ip_address=request.client.host,
+        details=data.model_dump(), ip_address=get_client_ip(request),
     )
     return unit
 
@@ -183,7 +183,7 @@ def update_community_unit(
     create_audit_entry(
         db, current_user.id, community_id, "UPDATE", "unit", unit_id,
         details=data.model_dump(exclude_unset=True),
-        ip_address=request.client.host,
+        ip_address=get_client_ip(request),
     )
     return updated
 
@@ -207,5 +207,5 @@ def delete_community_unit(
         raise HTTPException(status_code=409, detail="Unit has related charges or payments")
     create_audit_entry(
         db, current_user.id, community_id, "DELETE", "unit", unit_id,
-        ip_address=request.client.host,
+        ip_address=get_client_ip(request),
     )

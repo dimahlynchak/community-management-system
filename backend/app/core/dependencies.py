@@ -10,6 +10,11 @@ from app.models.user import User
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 
 
+def get_client_ip(request: Request) -> str | None:
+    """Безпечно отримує IP клієнта. request.client = None за деяких проксі/ASGI-серверів."""
+    return request.client.host if request.client else None
+
+
 def get_current_user(
     token: str = Depends(oauth2_scheme),
     db: Session = Depends(get_db),
@@ -109,7 +114,7 @@ def require_permission(permission_codename: str):
         _ensure_community_active(db, community_id)
         check_permission(
             db, current_user.id, community_id, permission_codename,
-            ip_address=request.client.host,
+            ip_address=get_client_ip(request),
         )
         return current_user
 
@@ -135,7 +140,7 @@ def require_membership(
 
         create_audit_entry(
             db, current_user.id, community_id, "ACCESS_DENIED", "membership", None,
-            ip_address=request.client.host,
+            ip_address=get_client_ip(request),
         )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
