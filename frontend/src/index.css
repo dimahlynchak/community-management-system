@@ -1,0 +1,47 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-slate-50 text-slate-900 font-sans antialiased;
+}
+
+@layer components {
+  .card {
+    @apply bg-white border border-slate-200 rounded-lg shadow-sm;
+  }
+
+  .card-header {
+    @apply px-5 py-4 border-b border-slate-200 flex items-center justify-between;
+  }
+
+  .card-body {
+    @apply p-5;
+  }
+
+  .badge {
+    @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium;
+  }
+
+  .badge-blue {
+    @apply bg-brand-50 text-brand-700;
+  }
+
+  .badge-green {
+    @apply bg-emerald-50 text-emerald-700;
+  }
+
+  .badge-red {
+    @apply bg-red-50 text-red-700;
+  }
+
+  .badge-slate {
+    @apply bg-slate-100 text-slate-700;
+  }
+}
