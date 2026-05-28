@@ -263,7 +263,7 @@ def community_balance(
 @router.get("/balance/export")
 def export_balance(
     community_id: int,
-    format: str = Query("xlsx", description="Формат: xlsx або pdf"),
+    format: str = Query("xlsx", pattern="^(xlsx|pdf)$", description="Формат: xlsx або pdf"),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("reports:generate")),
 ):
@@ -271,8 +271,6 @@ def export_balance(
     community = get_community(db, community_id)
     if community is None:
         raise HTTPException(status_code=404, detail="Community not found")
-    if format not in ("xlsx", "pdf"):
-        raise HTTPException(status_code=400, detail="format must be 'xlsx' or 'pdf'")
 
     balance_rows = get_balance_for_community(db, community_id)
 
