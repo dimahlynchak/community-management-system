@@ -255,3 +255,11 @@ dist-ssr
 .env
 .env.local
 .env.*.local
+
+
+# TypeScript incremental build cache
+*.tsbuildinfo
+
+# tsc -b output for node-side config
+vite.config.js
+vite.config.d.ts
