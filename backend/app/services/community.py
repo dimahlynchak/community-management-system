@@ -14,10 +14,6 @@ def create_community(db: Session, data: CommunityCreate) -> Community:
     return community
 
 
-def get_communities(db: Session) -> list[Community]:
-    return db.query(Community).all()
-
-
 def get_communities_for_user(db: Session, user_id: int) -> list[Community]:
     return (
         db.query(Community)

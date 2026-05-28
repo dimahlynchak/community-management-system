@@ -85,10 +85,6 @@ def create_charges_for_community(
     return charges
 
 
-def get_charges_by_unit(db: Session, unit_id: int) -> list[Charge]:
-    return db.query(Charge).filter(Charge.unit_id == unit_id).all()
-
-
 def get_charges_by_community(db: Session, community_id: int, period: str | None = None) -> list[Charge]:
     query = db.query(Charge).join(Unit).filter(Unit.community_id == community_id)
     if period:
@@ -163,10 +159,6 @@ def get_payments_by_unit(db: Session, unit_id: int) -> list[Payment]:
 
 def get_allocations_by_payment(db: Session, payment_id: int) -> list[PaymentAllocation]:
     return db.query(PaymentAllocation).filter(PaymentAllocation.payment_id == payment_id).all()
-
-
-def get_allocations_by_charge(db: Session, charge_id: int) -> list[PaymentAllocation]:
-    return db.query(PaymentAllocation).filter(PaymentAllocation.charge_id == charge_id).all()
 
 
 # --- Balance ---

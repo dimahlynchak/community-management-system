@@ -1,6 +1,6 @@
 import hashlib
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
@@ -59,8 +59,10 @@ def create_audit_entry(
 ) -> AuditLog:
     """Створює запис в журналі аудиту з hash chain."""
     previous_hash = get_last_hash(db)
-    # Явний Python-timestamp — той самий іде і в hash, і в БД (без розбіжності server_default)
-    timestamp = datetime.utcnow()
+    # Явний Python-timestamp — той самий іде і в hash, і в БД (без розбіжності server_default).
+    # Naive UTC: щоб verify_audit_chain рахувала той самий hash зі значення з БД,
+    # де колонка timestamp — DateTime без timezone.
+    timestamp = datetime.now(timezone.utc).replace(tzinfo=None)
 
     # Зводимо details до JSON-безпечних типів (Decimal/date -> str), щоб і JSONB-колонка,
     # і hash рахувалися з однакового канонічного представлення

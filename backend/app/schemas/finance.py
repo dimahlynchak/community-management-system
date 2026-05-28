@@ -163,7 +163,7 @@ class UnitBalanceResponse(BaseModel):
     unit_type: str
     total_charged: Decimal
     total_paid: Decimal
-    balance: Decimal  # positive = debt
+    balance: Decimal  # total_paid - total_charged: positive = credit (overpayment), negative = debt
 
 
 # --- Penalties ---

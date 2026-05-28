@@ -13,8 +13,8 @@ class AnnouncementCreate(BaseModel):
         v = v.strip()
         if not v:
             raise ValueError("title must not be empty")
-        if len(v) > 200:
-            raise ValueError("title must be at most 200 characters long")
+        if len(v) > 300:
+            raise ValueError("title must be at most 300 characters long")
         return v
 
     @field_validator("body")
