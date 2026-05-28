@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.dependencies import get_current_user, check_permission, get_user_permissions
+from app.core.dependencies import get_current_user, check_permission, get_user_permissions, get_client_ip
 from app.models.audit import AuditLog
 from app.models.user import User
 from app.models.user_community_role import UserCommunityRole
@@ -22,7 +22,7 @@ def list_audit_log(
     current_user: User = Depends(get_current_user),
 ):
     """Отримати записи журналу аудиту спільноти з фільтрацією."""
-    check_permission(db, current_user.id, community_id, "audit:read", request.client.host)
+    check_permission(db, current_user.id, community_id, "audit:read", get_client_ip(request))
     query = db.query(AuditLog).filter(
         AuditLog.community_id == community_id
     ).order_by(AuditLog.id.desc())

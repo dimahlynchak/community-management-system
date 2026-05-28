@@ -6,7 +6,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.dependencies import require_permission, require_membership
+from app.core.dependencies import require_permission, require_membership, get_client_ip
 from app.models.payment import Payment
 from app.models.user import User
 from app.models.user_community_role import UserCommunityRole
@@ -58,7 +58,7 @@ def create_type(
     create_audit_entry(
         db, current_user.id, community_id, "CREATE", "charge_type", charge_type.id,
         details={"name": data.name, "calculation_method": data.calculation_method, "rate": str(data.rate)},
-        ip_address=request.client.host,
+        ip_address=get_client_ip(request),
     )
     return charge_type
 
@@ -96,7 +96,7 @@ def generate_charges(
     create_audit_entry(
         db, current_user.id, community_id, "CREATE", "charge", None,
         details={"charge_type_id": data.charge_type_id, "period": data.period, "count": len(charges)},
-        ip_address=request.client.host,
+        ip_address=get_client_ip(request),
     )
     return charges
 
@@ -211,7 +211,7 @@ def add_payment(
     create_audit_entry(
         db, current_user.id, community_id, "CREATE", "payment", payment.id,
         details={"unit_id": data.unit_id, "amount": str(data.amount)},
-        ip_address=request.client.host,
+        ip_address=get_client_ip(request),
     )
     return payment
 
@@ -328,7 +328,7 @@ def add_budget_item(
     create_audit_entry(
         db, current_user.id, community_id, "CREATE", "budget_item", item.id,
         details={k: str(v) if v is not None else None for k, v in data.model_dump().items()},
-        ip_address=request.client.host,
+        ip_address=get_client_ip(request),
     )
     return item
 

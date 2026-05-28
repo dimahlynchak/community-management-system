@@ -56,6 +56,8 @@ def create_charges_for_community(
         raise ValueError("Charge type not found")
     if charge_type.community_id != community_id:
         raise ValueError("Charge type does not belong to this community")
+    if not charge_type.is_active:
+        raise ValueError("Charge type is not active")
 
     units = db.query(Unit).filter(Unit.community_id == community_id).all()
     if not units:

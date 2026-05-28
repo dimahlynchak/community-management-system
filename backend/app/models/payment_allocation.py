@@ -1,6 +1,6 @@
 from decimal import Decimal
 
-from sqlalchemy import ForeignKey, Numeric
+from sqlalchemy import ForeignKey, Numeric, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -8,6 +8,12 @@ from app.core.database import Base
 
 class PaymentAllocation(Base):
     __tablename__ = "payment_allocations"
+    __table_args__ = (
+        UniqueConstraint(
+            "payment_id", "charge_id",
+            name="uq_payment_allocations_payment_charge",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     payment_id: Mapped[int] = mapped_column(ForeignKey("payments.id"))

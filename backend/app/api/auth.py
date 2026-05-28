@@ -5,7 +5,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.core.dependencies import get_current_user
+from app.core.dependencies import get_current_user, get_client_ip
 from app.core.security import decode_token
 from app.models.user import User
 from app.schemas.user import UserCreate, UserResponse, TokenResponse
@@ -59,19 +59,20 @@ def login(
         create_audit_entry(
             db, None, None, "LOGIN_FAILED", "user", None,
             details={"email": form_data.username},
-            ip_address=request.client.host,
+            ip_address=get_client_ip(request),
         )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password",
         )
+
     tokens = create_tokens(user.id)
     store_refresh_token(db, user.id, tokens["refresh_token"])
     _set_refresh_cookie(response, tokens["refresh_token"])
 
     create_audit_entry(
         db, user.id, None, "LOGIN", "user", user.id,
-        ip_address=request.client.host,
+        ip_address=get_client_ip(request),
     )
 
     return TokenResponse(access_token=tokens["access_token"])
@@ -124,7 +125,7 @@ def logout(
     response.delete_cookie(REFRESH_COOKIE)
     create_audit_entry(
         db, current_user.id, None, "LOGOUT", "user", current_user.id,
-        ip_address=request.client.host,
+        ip_address=get_client_ip(request),
     )
 
 

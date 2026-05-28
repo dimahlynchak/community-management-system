@@ -3,7 +3,7 @@ from sqlalchemy.exc import IntegrityError, InternalError
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.dependencies import get_current_user, require_permission, require_membership
+from app.core.dependencies import get_current_user, require_permission, require_membership, get_client_ip
 from app.models.role import Role
 from app.models.user import User
 from app.models.user_community_role import UserCommunityRole
@@ -53,7 +53,7 @@ def assign_member_role(
     create_audit_entry(
         db, current_user.id, community_id, "ASSIGN_ROLE", "member", data.user_id,
         details={"role_name": data.role_name, "unit_id": data.unit_id},
-        ip_address=request.client.host,
+        ip_address=get_client_ip(request),
     )
     return ucr
 
@@ -109,5 +109,5 @@ def remove_member(
     remove_role(db, ucr)
     create_audit_entry(
         db, current_user.id, community_id, "REMOVE_ROLE", "member", user_id,
-        ip_address=request.client.host,
+        ip_address=get_client_ip(request),
     )

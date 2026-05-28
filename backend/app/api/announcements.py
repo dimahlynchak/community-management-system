@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.dependencies import require_permission, require_membership
+from app.core.dependencies import require_permission, require_membership, get_client_ip
 from app.models.user import User
 from app.schemas.announcement import AnnouncementCreate, AnnouncementResponse
 from app.services.announcement import create_announcement, get_announcements
@@ -26,7 +26,7 @@ def create(
     announcement = create_announcement(db, community_id, data, current_user.id)
     create_audit_entry(
         db, current_user.id, community_id, "CREATE", "announcement", announcement.id,
-        ip_address=request.client.host,
+        ip_address=get_client_ip(request),
     )
     return announcement
 
