@@ -307,6 +307,12 @@ def community_penalties(
     daily_rate = Decimal(str(rate)) if rate is not None else Decimal(str(settings.PENALTY_DAILY_RATE))
     if daily_rate < 0:
         raise HTTPException(status_code=400, detail="rate must be >= 0")
+    max_rate = Decimal(str(settings.MAX_DAILY_PENALTY_RATE))
+    if daily_rate > max_rate:
+        raise HTTPException(
+            status_code=400,
+            detail=f"rate must be <= {max_rate} (2 × NBU discount rate / 365)",
+        )
     return calculate_penalties(db, community_id, daily_rate, as_of)
 
 

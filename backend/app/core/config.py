@@ -19,6 +19,11 @@ class Settings(BaseSettings):
     # Penalty rate: default 0.1% per day (can override in .env)
     PENALTY_DAILY_RATE: float = 0.001
 
+    # Верхня межа добової ставки пені згідно з чинним законодавством:
+    # 2 × облікова ставка НБУ / 365. Значення оновлюється у .env при зміні ставки НБУ.
+    # 0.00137 ≈ 2 × 25% / 365 (приблизно, для облікової ставки НБУ 25%).
+    MAX_DAILY_PENALTY_RATE: float = 0.00137
+
     class Config:
         env_file = ".env"
 

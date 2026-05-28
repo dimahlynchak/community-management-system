@@ -1,7 +1,7 @@
 import calendar
 import io
 from datetime import date
-from decimal import Decimal
+from decimal import Decimal, ROUND_DOWN
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -35,7 +35,9 @@ def get_charge_types(db: Session, community_id: int) -> list[ChargeType]:
 
 # --- Charges ---
 
-def calculate_amount(unit: Unit, charge_type: ChargeType, unit_count: int) -> Decimal:
+def calculate_amount(
+    unit: Unit, charge_type: ChargeType, unit_count: int, unit_index: int = 0,
+) -> Decimal:
     method = charge_type.calculation_method
     if method == "per_sqm":
         return (unit.area * charge_type.rate).quantize(Decimal("0.01"))
@@ -44,7 +46,15 @@ def calculate_amount(unit: Unit, charge_type: ChargeType, unit_count: int) -> De
     if method == "share":
         if unit_count == 0:
             return Decimal("0.00")
-        return (charge_type.rate / unit_count).quantize(Decimal("0.01"))
+        # Largest-remainder: усі юніти отримують базову порцію, округлену вниз до копійки;
+        # копієчний залишок r розподіляється по +0.01 серед перших r юнітів. Так
+        # максимальна асиметрія між юнітами не перевищує 1 копійку, а сума всіх
+        # нарахувань точно дорівнює rate.
+        base = (charge_type.rate / unit_count).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
+        remainder_kopecks = int((charge_type.rate - base * unit_count) * 100)
+        if unit_index < remainder_kopecks:
+            return (base + Decimal("0.01")).quantize(Decimal("0.01"))
+        return base
     raise ValueError(f"Unknown calculation_method: {method}")
 
 
@@ -65,8 +75,8 @@ def create_charges_for_community(
 
     unit_count = len(units)
     charges: list[Charge] = []
-    for unit in units:
-        amount = calculate_amount(unit, charge_type, unit_count)
+    for idx, unit in enumerate(units):
+        amount = calculate_amount(unit, charge_type, unit_count, idx)
         charge = Charge(
             unit_id=unit.id,
             charge_type_id=charge_type_id,
