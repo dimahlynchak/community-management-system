@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.exc import IntegrityError, InternalError
 from sqlalchemy.orm import Session
 
@@ -7,9 +7,25 @@ from app.core.dependencies import get_current_user, require_permission, require_
 from app.models.role import Role
 from app.models.user import User
 from app.models.user_community_role import UserCommunityRole
-from app.schemas.role import AssignRoleRequest, UserRoleResponse, RoleResponse
+from app.schemas.role import (
+    AssignRoleRequest,
+    CreateMemberWithUserRequest,
+    CreateMemberWithUserResponse,
+    MemberLookupResponse,
+    PasswordResetResponse,
+    RoleResponse,
+    UserRoleResponse,
+)
 from app.services.audit import create_audit_entry
-from app.services.role import get_roles, assign_role, get_community_members, remove_role
+from app.services.role import (
+    assign_role,
+    create_member_with_user,
+    get_community_members,
+    get_roles,
+    lookup_user_by_email,
+    remove_role,
+    reset_user_password_by_admin,
+)
 from app.services.community import get_community
 
 
@@ -56,6 +72,114 @@ def assign_member_role(
         ip_address=get_client_ip(request),
     )
     return ucr
+
+
+@router.get(
+    "/api/communities/{community_id}/members/lookup",
+    response_model=MemberLookupResponse,
+)
+def lookup_member(
+    community_id: int,
+    request: Request,
+    email: str = Query(..., description="Email користувача для пошуку"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("users:manage")),
+):
+    """Пошук існуючого користувача за email перед додаванням до спільноти.
+    Повертає мінімальний публічний профіль; решта даних залишаються
+    приватними. 404, якщо такого користувача немає."""
+    user = lookup_user_by_email(db, email)
+    if user is None:
+        raise HTTPException(status_code=404, detail="User with this email not found")
+    return MemberLookupResponse(id=user.id, full_name=user.full_name, email=user.email)
+
+
+@router.post(
+    "/api/communities/{community_id}/members/create-with-user",
+    response_model=CreateMemberWithUserResponse,
+    status_code=201,
+)
+def create_member_with_new_user(
+    community_id: int,
+    data: CreateMemberWithUserRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("users:manage")),
+):
+    """Створює нового користувача з випадковим паролем і одразу призначає
+    йому роль у спільноті. Згенерований пароль повертається голові один раз
+    у відповіді — голова передає його юзеру поза програмою (мессенджер,
+    особисто). Юзер при першому вході має змінити пароль через /profile."""
+    if get_community(db, community_id) is None:
+        raise HTTPException(status_code=404, detail="Community not found")
+    try:
+        user, membership, password = create_member_with_user(
+            db,
+            community_id=community_id,
+            email=data.email,
+            full_name=data.full_name,
+            phone=data.phone,
+            role_name=data.role_name,
+            unit_id=data.unit_id,
+        )
+    except ValueError as e:
+        msg = str(e)
+        status_code = 409 if "already exists" in msg else 400
+        raise HTTPException(status_code=status_code, detail=msg)
+    except (IntegrityError, InternalError) as e:
+        db.rollback()
+        error_msg = str(e.orig) if hasattr(e, 'orig') else str(e)
+        raise HTTPException(status_code=409, detail=error_msg)
+
+    # Два аудиторські записи: створення юзера + призначення ролі.
+    create_audit_entry(
+        db, current_user.id, community_id, "CREATE", "user", user.id,
+        details={"email": data.email, "full_name": data.full_name},
+        ip_address=get_client_ip(request),
+    )
+    create_audit_entry(
+        db, current_user.id, community_id, "ASSIGN_ROLE", "member", user.id,
+        details={"role_name": data.role_name, "unit_id": data.unit_id},
+        ip_address=get_client_ip(request),
+    )
+    return CreateMemberWithUserResponse(
+        membership=UserRoleResponse.model_validate(membership),
+        user_id=user.id,
+        email=user.email,
+        generated_password=password,
+    )
+
+
+@router.post(
+    "/api/communities/{community_id}/members/{user_id}/reset-password",
+    response_model=PasswordResetResponse,
+)
+def reset_member_password(
+    community_id: int,
+    user_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("users:manage")),
+):
+    """Скидає пароль учаснику спільноти на новий випадковий. Голова передає
+    його юзеру поза програмою. Усі активні refresh-токени цього юзера
+    відкликаються — попередні сесії на інших пристроях буде завершено."""
+    ucr = db.query(UserCommunityRole).filter(
+        UserCommunityRole.user_id == user_id,
+        UserCommunityRole.community_id == community_id,
+    ).first()
+    if ucr is None:
+        raise HTTPException(status_code=404, detail="Member not found in this community")
+    try:
+        user, new_password = reset_user_password_by_admin(db, user_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    create_audit_entry(
+        db, current_user.id, community_id, "PASSWORD_RESET", "user", user.id,
+        details={"by": "head"},
+        ip_address=get_client_ip(request),
+    )
+    return PasswordResetResponse(user_id=user.id, new_password=new_password)
 
 
 @router.get(
