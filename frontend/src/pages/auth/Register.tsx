@@ -3,15 +3,18 @@ import { Link, useNavigate } from 'react-router-dom';
 import { Building2 } from 'lucide-react';
 import { register as apiRegister } from '../../api/auth';
 import { extractErrorMessage } from '../../api/client';
+import { composePhone, DEFAULT_COUNTRY_CODE } from '../../data/countryCodes';
 import Button from '../../components/Button';
 import Input from '../../components/Input';
+import PhoneInput from '../../components/PhoneInput';
 import Alert from '../../components/Alert';
 
 export default function Register() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
-  const [phone, setPhone] = useState('');
+  const [countryCode, setCountryCode] = useState(DEFAULT_COUNTRY_CODE);
+  const [phoneDigits, setPhoneDigits] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
@@ -21,11 +24,12 @@ export default function Register() {
     setError(null);
     setLoading(true);
     try {
+      const phone = phoneDigits ? composePhone(countryCode, phoneDigits) : undefined;
       await apiRegister({
         email: email.trim(),
         password,
         full_name: fullName.trim(),
-        phone: phone.trim() || undefined,
+        phone,
       });
       navigate('/login', { state: { registered: true } });
     } catch (err) {
@@ -79,15 +83,13 @@ export default function Register() {
               autoComplete="email"
               placeholder="example@osbb.ua"
             />
-            <Input
-              id="phone"
-              type="tel"
+            <PhoneInput
               label="Телефон"
-              value={phone}
-              onChange={(e) => setPhone(e.target.value)}
-              autoComplete="tel"
-              placeholder="+380991234567"
-              hint="Необов'язково. Міжнародний формат, починається з +"
+              hint="Необов'язково. Виберіть код країни та введіть номер цифрами"
+              countryCode={countryCode}
+              digits={phoneDigits}
+              onCountryCodeChange={setCountryCode}
+              onDigitsChange={setPhoneDigits}
             />
             <Input
               id="password"

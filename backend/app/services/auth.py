@@ -80,3 +80,39 @@ def revoke_refresh_token(db: Session, token: str) -> bool:
     rt.revoked = True
     db.commit()
     return True
+
+
+def revoke_all_user_refresh_tokens(db: Session, user_id: int) -> int:
+    """Відкликає всі активні refresh-токени користувача. Повертає кількість."""
+    count = (
+        db.query(RefreshToken)
+        .filter(RefreshToken.user_id == user_id, RefreshToken.revoked == False)
+        .update({RefreshToken.revoked: True}, synchronize_session=False)
+    )
+    db.commit()
+    return count
+
+
+def change_user_password(db: Session, user: User, old_password: str, new_password: str) -> None:
+    """Перевіряє старий пароль, оновлює хеш, відкликає всі refresh-токени.
+    Кидає ValueError при невірному старому паролі або співпадінні нового зі старим."""
+    if not verify_password(old_password, user.password_hash):
+        raise ValueError("Old password is incorrect")
+    if verify_password(new_password, user.password_hash):
+        raise ValueError("New password must differ from the old one")
+    user.password_hash = hash_password(new_password)
+    db.commit()
+    revoke_all_user_refresh_tokens(db, user.id)
+
+
+def update_user_profile(
+    db: Session, user: User, full_name: str | None, phone: str | None,
+) -> User:
+    """Оновлює full_name та/або phone користувача. Email не змінюється тут."""
+    if full_name is not None:
+        user.full_name = full_name
+    if phone is not None:
+        user.phone = phone if phone else None
+    db.commit()
+    db.refresh(user)
+    return user
