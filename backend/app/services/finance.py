@@ -60,7 +60,19 @@ def calculate_amount(
 
 def create_charges_for_community(
     db: Session, community_id: int, charge_type_id: int, period: str, user_id: int,
+    unit_ids: list[int] | None = None,
 ) -> list[Charge]:
+    """Нараховує charges для активних приміщень спільноти.
+
+    Якщо unit_ids None — для всіх активних приміщень. Якщо вказано — лише для
+    переліку (всі мають належати спільноті і бути активними). Метод `share`
+    допускається лише для bulk-режиму (unit_ids=None), бо потребує знаменника
+    рівного загальній кількості приміщень спільноти.
+
+    Виконання атомарне: якщо хоча б один з обраних юнітів уже має нарахування
+    цього типу за цей період, нічого не створюється і кидається ValueError зі
+    списком конфліктних unit_id.
+    """
     charge_type = db.query(ChargeType).filter(ChargeType.id == charge_type_id).first()
     if charge_type is None:
         raise ValueError("Charge type not found")
@@ -69,7 +81,54 @@ def create_charges_for_community(
     if not charge_type.is_active:
         raise ValueError("Charge type is not active")
 
-    units = db.query(Unit).filter(Unit.community_id == community_id).all()
+    if unit_ids is None:
+        # Bulk-режим: усі активні приміщення спільноти.
+        units = (
+            db.query(Unit)
+            .filter(Unit.community_id == community_id, Unit.is_active == True)
+            .all()
+        )
+    else:
+        # Targeted-режим: лише вказані приміщення.
+        if charge_type.calculation_method == "share":
+            raise ValueError(
+                "Method 'share' requires bulk generation for all active units; "
+                "do not specify unit_ids"
+            )
+        units = (
+            db.query(Unit)
+            .filter(Unit.id.in_(unit_ids), Unit.community_id == community_id)
+            .all()
+        )
+        found_ids = {u.id for u in units}
+        missing = sorted(set(unit_ids) - found_ids)
+        if missing:
+            raise ValueError(f"Units not found in this community: {missing}")
+        inactive = sorted(u.id for u in units if not u.is_active)
+        if inactive:
+            raise ValueError(
+                f"Deactivated units cannot receive new charges: {inactive}"
+            )
+
+    if not units:
+        return []
+
+    # Пропускаємо юніти, у яких уже є charge цього типу за цей період: голова
+    # може повторно викликати ендпоінт або донарахувати решті, не вказуючи
+    # вручну тих, кому вже нараховано. Існуючі charges не змінюються.
+    existing_unit_ids = {
+        row[0] for row in (
+            db.query(Charge.unit_id)
+            .filter(
+                Charge.charge_type_id == charge_type_id,
+                Charge.period == period,
+                Charge.unit_id.in_([u.id for u in units]),
+            )
+            .all()
+        )
+    }
+    if existing_unit_ids:
+        units = [u for u in units if u.id not in existing_unit_ids]
     if not units:
         return []
 

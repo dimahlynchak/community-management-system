@@ -49,10 +49,19 @@ def create_unit(db: Session, community_id: int, data: UnitCreate) -> Unit:
 
 
 def get_units_by_community(db: Session, community_id: int) -> list[Unit]:
-    return db.query(Unit).filter(Unit.community_id == community_id).all()
+    """Перелік активних приміщень спільноти. Деактивовані (is_active=false)
+    залишаються у БД для збереження історії нарахувань/оплат, але у списку не
+    видаються."""
+    return (
+        db.query(Unit)
+        .filter(Unit.community_id == community_id, Unit.is_active == True)
+        .all()
+    )
 
 
 def get_unit(db: Session, unit_id: int) -> Unit | None:
+    """Юніт за ID незалежно від is_active — потрібно для перевірок при
+    обробці платежів, балансу, аудиту, де відображаємо й історичні дані."""
     return db.query(Unit).filter(Unit.id == unit_id).first()
 
 
@@ -65,5 +74,7 @@ def update_unit(db: Session, unit: Unit, data: UnitUpdate) -> Unit:
 
 
 def delete_unit(db: Session, unit: Unit) -> None:
-    db.delete(unit)
+    """Soft delete: позначає юніт неактивним. Усі пов'язані нарахування,
+    оплати та записи аудиту зберігаються без змін."""
+    unit.is_active = False
     db.commit()

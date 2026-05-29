@@ -4,8 +4,10 @@ import Layout from './components/Layout';
 import Login from './pages/auth/Login';
 import Register from './pages/auth/Register';
 import Home from './pages/Home';
-import NotFound from './pages/NotFound';
 import Profile from './pages/Profile';
+import CommunitiesList from './pages/communities/CommunitiesList';
+import CommunityDetail from './pages/communities/CommunityDetail';
+import NotFound from './pages/NotFound';
 
 export default function App() {
     return (
@@ -21,22 +23,10 @@ export default function App() {
             >
                 <Route path="/" element={<Home />} />
                 <Route path="/profile" element={<Profile />} />
-                <Route path="/communities" element={<CommunitiesPlaceholder />} />
+                <Route path="/communities" element={<CommunitiesList />} />
+                <Route path="/communities/:id" element={<CommunityDetail />} />
                 <Route path="*" element={<NotFound />} />
             </Route>
         </Routes>
-    );
-}
-
-function CommunitiesPlaceholder() {
-    return (
-        <div className="card max-w-2xl">
-            <div className="card-body space-y-2">
-                <h2 className="text-lg font-semibold text-slate-900">Спільноти</h2>
-                <p className="text-sm text-slate-600">
-                    Розділ реалізується наступним кроком розробки.
-                </p>
-            </div>
-        </div>
     );
 }

@@ -171,9 +171,9 @@ def update_community_unit(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("units:manage")),
 ):
-    """Оновити дані приміщення."""
+    """Оновити дані приміщення. Деактивовані приміщення не редагуються."""
     unit = get_unit(db, unit_id)
-    if unit is None or unit.community_id != community_id:
+    if unit is None or unit.community_id != community_id or not unit.is_active:
         raise HTTPException(status_code=404, detail="Unit not found")
     try:
         updated = update_unit(db, unit, data)
@@ -196,15 +196,13 @@ def delete_community_unit(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("units:manage")),
 ):
-    """Видалити приміщення."""
+    """Деактивувати приміщення (soft-delete). Усі історичні нарахування,
+    оплати та записи аудиту зберігаються. Повторне видалення вже неактивного
+    приміщення повертає 404."""
     unit = get_unit(db, unit_id)
-    if unit is None or unit.community_id != community_id:
+    if unit is None or unit.community_id != community_id or not unit.is_active:
         raise HTTPException(status_code=404, detail="Unit not found")
-    try:
-        delete_unit(db, unit)
-    except IntegrityError:
-        db.rollback()
-        raise HTTPException(status_code=409, detail="Unit has related charges or payments")
+    delete_unit(db, unit)
     create_audit_entry(
         db, current_user.id, community_id, "DELETE", "unit", unit_id,
         ip_address=get_client_ip(request),

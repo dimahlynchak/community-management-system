@@ -82,11 +82,18 @@ def generate_charges(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("charges:create")),
 ):
+    """Масове нарахування для всіх активних приміщень спільноти (якщо
+    unit_ids не вказано) або для вибраного списку приміщень. Метод тарифу
+    'share' допускається лише без unit_ids. Юніти, які вже мають нарахування
+    цього типу за цей період, пропускаються мовчки — повторний виклик або
+    послідовне донарахування «решті» безпечне; у відповіді повертається лише
+    список новостворених charges."""
     if get_community(db, community_id) is None:
         raise HTTPException(status_code=404, detail="Community not found")
     try:
         charges = create_charges_for_community(
             db, community_id, data.charge_type_id, data.period, current_user.id,
+            unit_ids=data.unit_ids,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -95,7 +102,12 @@ def generate_charges(
         raise HTTPException(status_code=409, detail="Charges for this period already exist")
     create_audit_entry(
         db, current_user.id, community_id, "CREATE", "charge", None,
-        details={"charge_type_id": data.charge_type_id, "period": data.period, "count": len(charges)},
+        details={
+            "charge_type_id": data.charge_type_id,
+            "period": data.period,
+            "unit_ids": data.unit_ids,
+            "count": len(charges),
+        },
         ip_address=get_client_ip(request),
     )
     return charges

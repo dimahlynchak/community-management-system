@@ -45,8 +45,13 @@ class ChargeTypeResponse(BaseModel):
 # --- Charges ---
 
 class ChargeCreate(BaseModel):
+    """Параметри масового нарахування. Якщо unit_ids порожній або None,
+    нарахування створюються для всіх активних приміщень спільноти. Якщо
+    список заданий — лише для перелічених приміщень (мають належати спільноті
+    і бути активними)."""
     charge_type_id: int
     period: str  # YYYY-MM
+    unit_ids: list[int] | None = None
 
     @field_validator("period")
     @classmethod
@@ -54,6 +59,24 @@ class ChargeCreate(BaseModel):
         if not _PERIOD_RE.match(v):
             raise ValueError("period must be in format YYYY-MM")
         return v
+
+    @field_validator("unit_ids")
+    @classmethod
+    def _validate_unit_ids(cls, v: list[int] | None) -> list[int] | None:
+        if v is None:
+            return v
+        if not v:
+            return None
+        if any(uid <= 0 for uid in v):
+            raise ValueError("unit_ids must contain positive integers")
+        # Прибираємо дублі, зберігаючи порядок
+        seen: set[int] = set()
+        ordered: list[int] = []
+        for uid in v:
+            if uid not in seen:
+                seen.add(uid)
+                ordered.append(uid)
+        return ordered
 
 
 class ChargeResponse(BaseModel):
