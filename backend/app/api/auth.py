@@ -8,10 +8,13 @@ from app.core.database import get_db
 from app.core.dependencies import get_current_user, get_client_ip
 from app.core.security import decode_token
 from app.models.user import User
-from app.schemas.user import UserCreate, UserResponse, TokenResponse
+from app.schemas.user import (
+    PasswordChangeRequest, TokenResponse, UserCreate, UserResponse, UserUpdate,
+)
 from app.services.auth import (
     register_user, authenticate_user, create_tokens,
     store_refresh_token, get_valid_refresh_token, revoke_refresh_token,
+    change_user_password, update_user_profile,
 )
 from app.services.audit import create_audit_entry
 
@@ -133,3 +136,46 @@ def logout(
 def get_me(current_user: User = Depends(get_current_user)):
     """Повертає дані поточного автентифікованого користувача."""
     return current_user
+
+
+@router.patch("/me", response_model=UserResponse)
+def update_me(
+    data: UserUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Оновити власні дані користувача (full_name, phone). Email не змінюється."""
+    changes = data.model_dump(exclude_unset=True)
+    if not changes:
+        return current_user
+    updated = update_user_profile(
+        db, current_user, full_name=changes.get("full_name"), phone=changes.get("phone"),
+    )
+    create_audit_entry(
+        db, current_user.id, None, "UPDATE", "user", current_user.id,
+        details=changes,
+        ip_address=get_client_ip(request),
+    )
+    return updated
+
+
+@router.post("/change-password", status_code=status.HTTP_204_NO_CONTENT)
+def change_password(
+    data: PasswordChangeRequest,
+    response: Response,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Зміна власного паролю: перевірка старого, оновлення хешу, ревок усіх refresh-токенів.
+    Поточну сесію після виклику буде завершено — клієнт має повторно увійти."""
+    try:
+        change_user_password(db, current_user, data.old_password, data.new_password)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    response.delete_cookie(REFRESH_COOKIE)
+    create_audit_entry(
+        db, current_user.id, None, "PASSWORD_CHANGED", "user", current_user.id,
+        ip_address=get_client_ip(request),
+    )

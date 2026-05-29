@@ -5,6 +5,7 @@ import Login from './pages/auth/Login';
 import Register from './pages/auth/Register';
 import Home from './pages/Home';
 import NotFound from './pages/NotFound';
+import Profile from './pages/Profile';
 
 export default function App() {
     return (
@@ -19,6 +20,7 @@ export default function App() {
                 }
             >
                 <Route path="/" element={<Home />} />
+                <Route path="/profile" element={<Profile />} />
                 <Route path="/communities" element={<CommunitiesPlaceholder />} />
                 <Route path="*" element={<NotFound />} />
             </Route>
