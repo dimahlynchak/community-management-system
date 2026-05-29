@@ -174,7 +174,7 @@ export default function CommunityDetail() {
             Підмодулі додаватимуться у наступних кроках розробки.
           </p>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
-            <SectionTile to="" icon={Home} label="Приміщення" disabled />
+            <SectionTile to={`/communities/${communityId}/units`} icon={Home} label="Приміщення" />
             <SectionTile to="" icon={Users} label="Учасники" disabled />
             <SectionTile to="" icon={Megaphone} label="Оголошення" disabled />
             <SectionTile to="" icon={Wallet} label="Нарахування" disabled />
@@ -254,16 +254,24 @@ interface SectionTileProps {
   disabled?: boolean;
 }
 
-function SectionTile({ icon: Icon, label, disabled }: SectionTileProps) {
+function SectionTile({ to, icon: Icon, label, disabled }: SectionTileProps) {
   const className =
     'flex items-center gap-2 px-3 py-3 rounded-md border text-sm font-medium ' +
     (disabled
       ? 'border-slate-200 text-slate-400 bg-slate-50 cursor-not-allowed'
       : 'border-slate-200 text-slate-700 hover:bg-slate-50 hover:border-slate-300');
+  if (disabled || !to) {
+    return (
+      <div className={className} aria-disabled={disabled}>
+        <Icon size={16} />
+        {label}
+      </div>
+    );
+  }
   return (
-    <div className={className} aria-disabled={disabled}>
+    <Link to={to} className={className}>
       <Icon size={16} />
       {label}
-    </div>
+    </Link>
   );
 }

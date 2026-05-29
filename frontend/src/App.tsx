@@ -7,6 +7,7 @@ import Home from './pages/Home';
 import Profile from './pages/Profile';
 import CommunitiesList from './pages/communities/CommunitiesList';
 import CommunityDetail from './pages/communities/CommunityDetail';
+import UnitsList from './pages/communities/UnitsList';
 import NotFound from './pages/NotFound';
 
 export default function App() {
@@ -25,6 +26,7 @@ export default function App() {
                 <Route path="/profile" element={<Profile />} />
                 <Route path="/communities" element={<CommunitiesList />} />
                 <Route path="/communities/:id" element={<CommunityDetail />} />
+                <Route path="/communities/:id/units" element={<UnitsList />} />
                 <Route path="*" element={<NotFound />} />
             </Route>
         </Routes>
