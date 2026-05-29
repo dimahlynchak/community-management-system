@@ -19,6 +19,7 @@ class Unit(Base):
     type: Mapped[str] = mapped_column(String(20))
     area: Mapped[Decimal] = mapped_column(Numeric(8, 2))
     floor: Mapped[int | None]
+    is_active: Mapped[bool] = mapped_column(default=True, server_default="true")
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
 

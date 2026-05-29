@@ -123,6 +123,7 @@ class UnitResponse(BaseModel):
     type: str
     area: Decimal
     floor: int | None
+    is_active: bool
     created_at: datetime
     updated_at: datetime
 
