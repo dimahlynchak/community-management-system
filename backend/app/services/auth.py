@@ -10,6 +10,14 @@ from app.models.user import User
 from app.schemas.user import UserCreate
 
 
+# Bcrypt-хеш одноразово згенерованої випадкової рядка. Використовується для
+# constant-time перевірки в authenticate_user, коли юзера за email не знайдено
+# — щоб тимінг відповіді не дозволяв розрізняти «email невідомий» від
+# «пароль неправильний». Обчислюється один раз при імпорті модуля; bcrypt
+# rounds=12 → ~250 мс одноразово на старт процесу.
+_DUMMY_PASSWORD_HASH = hash_password("__placeholder_never_matches__")
+
+
 def register_user(db: Session, data: UserCreate) -> User:
     """Створює нового користувача в БД."""
     user = User(
@@ -25,9 +33,18 @@ def register_user(db: Session, data: UserCreate) -> User:
 
 
 def authenticate_user(db: Session, email: str, password: str) -> User | None:
-    """Перевіряє email + пароль, повертає User або None."""
+    """Перевіряє email + пароль, повертає User або None.
+
+    Захист від тимінг-атаки: якщо юзера за email не знайдено, однак запускаємо
+    bcrypt-перевірку проти фіксованого хешу-плейсхолдера. Так час відповіді
+    «email невідомий» ≈ «пароль неправильний», і зловмисник не може через
+    timing визначити, які email-и зареєстровані."""
     user = db.query(User).filter(User.email == email).first()
-    if user is None or not verify_password(password, user.password_hash):
+    if user is None:
+        # Constant-time dummy verify (bcrypt $2b$12$… на пустий рядок).
+        verify_password(password, _DUMMY_PASSWORD_HASH)
+        return None
+    if not verify_password(password, user.password_hash):
         return None
     if not user.is_active:
         return None
@@ -88,6 +105,24 @@ def revoke_all_user_refresh_tokens(db: Session, user_id: int) -> int:
         db.query(RefreshToken)
         .filter(RefreshToken.user_id == user_id, RefreshToken.revoked == False)
         .update({RefreshToken.revoked: True}, synchronize_session=False)
+    )
+    db.commit()
+    return count
+
+
+def cleanup_expired_refresh_tokens(db: Session) -> int:
+    """Видаляє з БД всі прострочені або відкликані refresh-токени. Викликається
+    опортуністично з login (раз на кілька входів), щоб таблиця не накопичувала
+    «мертві» рядки до нескінченності. Безпечно для багатоінстансного бекенду:
+    DELETE атомарний, програш гонитви — один інстанс видалить, інший побачить
+    нуль рядків."""
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    count = (
+        db.query(RefreshToken)
+        .filter(
+            (RefreshToken.expires_at < now) | (RefreshToken.revoked == True)
+        )
+        .delete(synchronize_session=False)
     )
     db.commit()
     return count

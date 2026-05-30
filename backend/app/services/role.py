@@ -47,7 +47,18 @@ def assign_role(
     create_charges_for_community).
 
     Захист засновника: не можна призначити засновнику роль, відмінну від head —
-    це б позбавило його контролю над спільнотою. Спершу transfer_founder."""
+    це б позбавило його контролю над спільнотою. Спершу transfer_founder.
+
+    Валідація користувача: цільовий user_id має існувати та бути активним.
+    Без цього неіснуючий ID давав би misleading 409 «User already has a
+    role» через IntegrityError; деактивованому юзеру не варто давати нову
+    роль, бо вхід однак заблокований."""
+    user = db.query(User).filter(User.id == user_id).first()
+    if user is None:
+        raise ValueError("User not found")
+    if not user.is_active:
+        raise ValueError("User is inactive")
+
     role = db.query(Role).filter(Role.name == role_name).first()
     if role is None:
         raise ValueError(f"Role '{role_name}' not found")

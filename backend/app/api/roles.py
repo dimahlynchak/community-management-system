@@ -240,16 +240,20 @@ def remove_member(
 
     role = db.query(Role).filter(Role.id == ucr.role_id).first()
     if role is not None and role.name == "head":
-        head_count = (
+        # Блокуємо рядки head цієї спільноти до кінця транзакції: інакше
+        # два паралельні DELETE-запити могли б обидва побачити count == 2
+        # і обидва закомітити видалення, лишивши спільноту без жодного голови.
+        head_rows = (
             db.query(UserCommunityRole)
             .join(Role, Role.id == UserCommunityRole.role_id)
             .filter(
                 UserCommunityRole.community_id == community_id,
                 Role.name == "head",
             )
-            .count()
+            .with_for_update()
+            .all()
         )
-        if head_count <= 1:
+        if len(head_rows) <= 1:
             raise HTTPException(
                 status_code=409,
                 detail="Cannot remove the last head of the community",
