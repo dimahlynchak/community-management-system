@@ -18,7 +18,7 @@ import type {
   RoleName,
   Unit,
 } from '../types/api';
-import { unitTypeLabel } from '../data/unitTypes';
+import { formatUnitLabel } from '../data/unitTypes';
 
 type Stage = 'email' | 'existing' | 'new' | 'created';
 
@@ -302,7 +302,7 @@ function UnitPicker({ units, value, onChange, required }: UnitPickerProps) {
         <option value="">— не прив'язувати —</option>
         {units.map((u) => (
           <option key={u.id} value={u.id}>
-            №{u.number} · {unitTypeLabel(u.type)}
+            {formatUnitLabel(u)}
           </option>
         ))}
       </select>
@@ -312,6 +312,10 @@ function UnitPicker({ units, value, onChange, required }: UnitPickerProps) {
           кабінетом /my-charges
         </p>
       )}
+      <p className="text-xs text-slate-500">
+        Деактивовані приміщення показано з позначкою — їх можна прив'язати
+        колишньому мешканцю для перегляду/погашення історичного боргу.
+      </p>
     </div>
   );
 }
