@@ -6,16 +6,17 @@ from app.core.database import get_db
 from app.core.dependencies import get_current_user, require_permission, require_membership, get_client_ip
 from app.models.user import User
 from app.schemas.community import (
-    CommunityCreate, CommunityUpdate, CommunityResponse,
+    CommunityCreate, CommunityUpdate, CommunityResponse, TransferFounderRequest,
     UnitCreate, UnitUpdate, UnitResponse,
 )
+from app.schemas.role import UserRoleResponse
 from app.services.community import (
     create_community, get_communities_for_user, get_community,
-    update_community, delete_community,
+    update_community, delete_community, transfer_founder,
     create_unit, get_units_by_community, get_unit,
     update_unit, delete_unit,
 )
-from app.services.role import assign_role
+from app.services.role import assign_role, get_my_membership
 from app.services.audit import create_audit_entry
 from fastapi import Request
 
@@ -32,9 +33,11 @@ def create(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Створити нову спільноту (ОСББ). Творець стає головою правління."""
+    """Створити нову спільноту (ОСББ). Творець стає засновником і головою
+    правління. Засновника не можна видалити з head-ролі, доки він не передасть
+    засновництво іншому head (захист від ворожого захоплення)."""
     try:
-        community = create_community(db, data)
+        community = create_community(db, data, founder_user_id=current_user.id)
     except IntegrityError as exc:
         db.rollback()
         detail = "Community with this EDRPOU already exists" if "edrpou" in str(exc).lower() else "Community already exists"
@@ -46,6 +49,55 @@ def create(
         details=data.model_dump(), ip_address=get_client_ip(request),
     )
     return community
+
+
+@router.post("/{community_id}/transfer-founder", response_model=CommunityResponse)
+def transfer_community_founder(
+    community_id: int,
+    data: TransferFounderRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Передає права засновника іншому користувачу. Викликати може лише
+    поточний засновник. Цільовий юзер має вже бути head у цій спільноті."""
+    community = get_community(db, community_id)
+    if community is None:
+        raise HTTPException(status_code=404, detail="Community not found")
+    if community.founder_user_id != current_user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="Only the current founder can transfer founder rights",
+        )
+    try:
+        updated = transfer_founder(db, community, data.new_founder_user_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    create_audit_entry(
+        db, current_user.id, community_id, "UPDATE", "community", community_id,
+        details={
+            "transfer_founder": True,
+            "from_user_id": current_user.id,
+            "to_user_id": data.new_founder_user_id,
+        },
+        ip_address=get_client_ip(request),
+    )
+    return updated
+
+
+@router.get("/{community_id}/me/membership", response_model=UserRoleResponse)
+def get_my_membership_endpoint(
+    community_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Повертає власне membership поточного користувача у цій спільноті.
+    Доступне будь-якій ролі. Призначення: визначати свою роль/юніт без
+    запиту повного списку учасників (privacy для резидентів)."""
+    membership = get_my_membership(db, current_user.id, community_id)
+    if membership is None:
+        raise HTTPException(status_code=404, detail="Not a member of this community")
+    return membership
 
 
 @router.get("/", response_model=list[CommunityResponse])

@@ -3,28 +3,21 @@ from sqlalchemy.exc import IntegrityError, InternalError
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.dependencies import get_current_user, require_permission, require_membership, get_client_ip
+from app.core.dependencies import (
+    get_current_user, get_user_permissions, require_permission, require_membership,
+    get_client_ip,
+)
 from app.models.role import Role
 from app.models.user import User
 from app.models.user_community_role import UserCommunityRole
 from app.schemas.role import (
-    AssignRoleRequest,
-    CreateMemberWithUserRequest,
-    CreateMemberWithUserResponse,
-    MemberLookupResponse,
-    PasswordResetResponse,
-    RoleResponse,
-    UserRoleResponse,
+    AssignRoleRequest, CreateMemberWithUserRequest, CreateMemberWithUserResponse,
+    MemberLookupResponse, PasswordResetResponse, RoleResponse, UserRoleResponse,
 )
 from app.services.audit import create_audit_entry
 from app.services.role import (
-    assign_role,
-    create_member_with_user,
-    get_community_members,
-    get_roles,
-    lookup_user_by_email,
-    remove_role,
-    reset_user_password_by_admin,
+    assign_role, create_member_with_user, get_community_members, get_roles,
+    lookup_user_by_email, remove_role, reset_user_password_by_admin,
 )
 from app.services.community import get_community
 
@@ -191,7 +184,31 @@ def list_members(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_membership),
 ):
-    """Отримати учасників спільноти з ролями."""
+
+    def _ensure_members_list_access(db: Session, user_id: int, community_id: int) -> None:
+        """Список членів спільноти доступний лише ролям, що мають оперативні
+        повноваження (technician+). Резидент має тільки own_charges:read, для
+        нього існує GET /communities/{id}/me/membership."""
+
+        perms = get_user_permissions(db, user_id, community_id)
+
+        if not perms:
+            raise HTTPException(
+                status_code=403,
+                detail = "Not a member of this community",
+            )
+        # Резидент має лише own_charges:read. Tech+ мають хоча б один із цих.
+        privileged = {"announcements:create", "users:manage", "charges:read", "payments:read"}
+
+        if not (perms & privileged):
+            raise HTTPException(
+                status_code=403,
+                detail = "Members list is not available to residents; use /me/membership",
+            )
+
+    """Отримати учасників спільноти з ролями. Доступно technician+ (резидент
+    має дивитися лише власне membership через /me/membership — privacy)."""
+    _ensure_members_list_access(db, current_user.id, community_id)
     return get_community_members(db, community_id)
 
 
@@ -214,6 +231,13 @@ def remove_member(
     if ucr is None:
         raise HTTPException(status_code=404, detail="Member not found")
 
+    community = get_community(db, community_id)
+    if community is not None and community.founder_user_id == user_id:
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot remove the founder; transfer founder rights first",
+        )
+
     role = db.query(Role).filter(Role.id == ucr.role_id).first()
     if role is not None and role.name == "head":
         head_count = (
@@ -230,7 +254,10 @@ def remove_member(
                 status_code=409,
                 detail="Cannot remove the last head of the community",
             )
-    remove_role(db, ucr)
+    try:
+        remove_role(db, ucr)
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
     create_audit_entry(
         db, current_user.id, community_id, "REMOVE_ROLE", "member", user_id,
         ip_address=get_client_ip(request),

@@ -13,9 +13,9 @@ from app.models.user_community_role import UserCommunityRole
 from app.schemas.finance import (
     AllocationResponse,
     BudgetItemCreate, BudgetItemResponse,
-    ChargeCreate, ChargeResponse,
+    ChargeCreate, ChargeResponse, ChargeUpdate,
     ChargeTypeCreate, ChargeTypeResponse,
-    PaymentCreate, PaymentResponse,
+    PaymentCreate, PaymentResponse, PaymentUpdate,
     UnitBalanceResponse,
     UnitPenaltyResponse,
 )
@@ -26,10 +26,13 @@ from app.services.finance import (
     create_charge_type, get_charge_types,
     create_charges_for_community, get_charges_by_community,
     create_payment, get_payments_by_unit,
+    delete_charge, delete_payment,
     export_balance_pdf, export_balance_xlsx,
     get_allocations_by_payment,
     get_balance_for_community, get_balance_for_unit,
+    get_charge, get_payment,
     get_my_charges,
+    update_charge_amount, update_payment,
 )
 from app.services.community import get_community, get_unit
 
@@ -117,10 +120,14 @@ def generate_charges(
 def list_charges(
     community_id: int,
     period: str | None = Query(None, description="Фільтр по періоду (YYYY-MM)"),
+    unit_id: int | None = Query(None, description="Фільтр по приміщенню"),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("charges:read")),
 ):
-    return get_charges_by_community(db, community_id, period)
+    """Список нарахувань спільноти. Опціональні фільтри period і unit_id —
+    застосовуються на стороні БД (composite-індекс ix_charges_unit_id_period)
+    для уникнення великих payload для спільнот з тисячами charges."""
+    return get_charges_by_community(db, community_id, period, unit_id)
 
 
 # --- Resident self-service ---
@@ -226,6 +233,142 @@ def add_payment(
         ip_address=get_client_ip(request),
     )
     return payment
+
+
+@router.patch("/charges/{charge_id}", response_model=ChargeResponse)
+def update_charge(
+    community_id: int,
+    charge_id: int,
+    data: ChargeUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("charges:create")),
+):
+    """Оновлює суму нарахування. Період і тип не міняються — якщо помилка
+    в них, видаліть і створіть наново. FIFO-розподіл усіх платежів юніта
+    перераховується автоматично."""
+    charge = get_charge(db, charge_id)
+    if charge is None:
+        raise HTTPException(status_code=404, detail="Charge not found")
+    unit = get_unit(db, charge.unit_id)
+    if unit is None or unit.community_id != community_id:
+        raise HTTPException(status_code=404, detail="Charge not in this community")
+    old_amount = str(charge.amount)
+    try:
+        updated = update_charge_amount(db, charge, data.amount)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    create_audit_entry(
+        db, current_user.id, community_id, "UPDATE", "charge", charge_id,
+        details={
+            "unit_id": charge.unit_id,
+            "old_amount": old_amount,
+            "new_amount": str(data.amount),
+        },
+        ip_address=get_client_ip(request),
+    )
+    return updated
+
+
+@router.delete("/charges/{charge_id}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_charge(
+    community_id: int,
+    charge_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("charges:create")),
+):
+    """Видаляє нарахування. Звільнені суми платежів цього юніта автоматично
+    перерозподіляються FIFO на інші непогашені charges."""
+    charge = get_charge(db, charge_id)
+    if charge is None:
+        raise HTTPException(status_code=404, detail="Charge not found")
+    unit = get_unit(db, charge.unit_id)
+    if unit is None or unit.community_id != community_id:
+        raise HTTPException(status_code=404, detail="Charge not in this community")
+    details = {
+        "unit_id": charge.unit_id,
+        "amount": str(charge.amount),
+        "period": charge.period,
+        "charge_type_id": charge.charge_type_id,
+    }
+    delete_charge(db, charge)
+    create_audit_entry(
+        db, current_user.id, community_id, "DELETE", "charge", charge_id,
+        details=details, ip_address=get_client_ip(request),
+    )
+
+
+@router.patch("/payments/{payment_id}", response_model=PaymentResponse)
+def update_payment_endpoint(
+    community_id: int,
+    payment_id: int,
+    data: PaymentUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("payments:create")),
+):
+    """Оновлює суму, дату або призначення платежу. Зміна суми/дати викликає
+    перерахунок FIFO для всіх платежів юніта."""
+    payment = get_payment(db, payment_id)
+    if payment is None:
+        raise HTTPException(status_code=404, detail="Payment not found")
+    unit = get_unit(db, payment.unit_id)
+    if unit is None or unit.community_id != community_id:
+        raise HTTPException(status_code=404, detail="Payment not in this community")
+    fields = data.model_dump(exclude_unset=True)
+    before = {
+        "amount": str(payment.amount),
+        "payment_date": payment.payment_date.isoformat(),
+        "description": payment.description,
+    }
+    try:
+        updated = update_payment(
+            db,
+            payment,
+            new_amount=data.amount,
+            new_date=data.payment_date,
+            new_description=data.description,
+            description_explicit="description" in fields,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    create_audit_entry(
+        db, current_user.id, community_id, "UPDATE", "payment", payment_id,
+        details={"unit_id": payment.unit_id, "before": before, "changes": {
+            k: str(v) if v is not None else None for k, v in fields.items()
+        }},
+        ip_address=get_client_ip(request),
+    )
+    return updated
+
+
+@router.delete("/payments/{payment_id}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_payment(
+    community_id: int,
+    payment_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("payments:create")),
+):
+    """Видаляє платіж. Інші платежі юніта перерозподіляються FIFO заново —
+    відповідні charges стають менш погашеними."""
+    payment = get_payment(db, payment_id)
+    if payment is None:
+        raise HTTPException(status_code=404, detail="Payment not found")
+    unit = get_unit(db, payment.unit_id)
+    if unit is None or unit.community_id != community_id:
+        raise HTTPException(status_code=404, detail="Payment not in this community")
+    details = {
+        "unit_id": payment.unit_id,
+        "amount": str(payment.amount),
+        "payment_date": payment.payment_date.isoformat(),
+    }
+    delete_payment(db, payment)
+    create_audit_entry(
+        db, current_user.id, community_id, "DELETE", "payment", payment_id,
+        details=details, ip_address=get_client_ip(request),
+    )
 
 
 @router.get("/payments", response_model=list[PaymentResponse])

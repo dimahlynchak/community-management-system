@@ -19,6 +19,7 @@ import {
 import {
   deleteCommunity,
   getCommunity,
+  getMyMembership,
   listMembers,
   updateCommunity,
 } from '../../api/communities';
@@ -55,14 +56,21 @@ export default function CommunityDetail() {
       return;
     }
     try {
-      const [c, members] = await Promise.all([
+      // Резидент не має доступу до повного списку учасників (privacy);
+      // моя роль приходить через /me/membership, а кількість учасників —
+      // тільки якщо є доступ (technician+). Для резидента memberCount = null.
+      const [c, me] = await Promise.all([
         getCommunity(communityId),
-        listMembers(communityId),
+        getMyMembership(communityId),
       ]);
       setCommunity(c);
-      setMemberCount(members.length);
-      const me = members.find((m) => m.user_id === user?.id);
       setMyRole((me?.role.name as RoleName | undefined) ?? null);
+      try {
+        const members = await listMembers(communityId);
+        setMemberCount(members.length);
+      } catch {
+        setMemberCount(null);
+      }
     } catch (err) {
       setError(extractErrorMessage(err, 'Не вдалося завантажити спільноту'));
     }
@@ -178,7 +186,12 @@ export default function CommunityDetail() {
           </p>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
             <SectionTile to={`/communities/${communityId}/units`} icon={Home} label="Приміщення" />
-            <SectionTile to={`/communities/${communityId}/members`} icon={Users} label="Учасники" />
+            <SectionTile
+              to={`/communities/${communityId}/members`}
+              icon={Users}
+              label="Учасники"
+              disabled={myRole === 'resident'}
+            />
             <SectionTile to={`/communities/${communityId}/announcements`} icon={Megaphone} label="Оголошення" />
             <SectionTile to={`/communities/${communityId}/charges`} icon={Wallet} label="Нарахування" />
             <SectionTile to={`/communities/${communityId}/payments`} icon={Receipt} label="Платежі" />

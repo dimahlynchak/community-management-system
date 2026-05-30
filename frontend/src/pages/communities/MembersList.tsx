@@ -2,7 +2,9 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
   ChevronLeft,
+  Crown,
   KeyRound,
+  Send,
   Trash2,
   UserPlus,
   Users,
@@ -12,9 +14,19 @@ import {
   removeMember,
   resetMemberPassword,
 } from '../../api/roles';
+import {
+  getCommunity,
+  getMyMembership,
+  transferFounder,
+} from '../../api/communities';
 import { listUnits } from '../../api/units';
 import { extractErrorMessage } from '../../api/client';
-import type { RoleName, Unit, UserRoleResponse } from '../../types/api';
+import type {
+  Community,
+  RoleName,
+  Unit,
+  UserRoleResponse,
+} from '../../types/api';
 import { useAuth } from '../../auth/useAuth';
 import { hasPermission, ROLE_DISPLAY } from '../../utils/permissions';
 import { formatDate } from '../../utils/format';
@@ -25,17 +37,21 @@ import EmptyState from '../../components/EmptyState';
 import ConfirmDialog from '../../components/ConfirmDialog';
 import AddMemberModal from '../../components/AddMemberModal';
 import PasswordRevealModal from '../../components/PasswordRevealModal';
+import TransferFounderModal from '../../components/TransferFounderModal';
 
 export default function MembersList() {
   const { id } = useParams<{ id: string }>();
   const communityId = Number(id);
   const { user } = useAuth();
 
+  const [community, setCommunity] = useState<Community | null>(null);
   const [members, setMembers] = useState<UserRoleResponse[] | null>(null);
   const [units, setUnits] = useState<Unit[]>([]);
   const [myRole, setMyRole] = useState<RoleName | null>(null);
+  const [forbidden, setForbidden] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
+  const [transferOpen, setTransferOpen] = useState(false);
   const [removing, setRemoving] = useState<UserRoleResponse | null>(null);
   const [resetting, setResetting] = useState<UserRoleResponse | null>(null);
   const [actionBusy, setActionBusy] = useState(false);
@@ -49,14 +65,36 @@ export default function MembersList() {
   const reload = useCallback(async () => {
     setError(null);
     try {
-      const data = await listMembers(communityId);
+      const [c, data] = await Promise.all([
+        getCommunity(communityId),
+        listMembers(communityId),
+      ]);
+      setCommunity(c);
       setMembers(
-        [...data].sort((a, b) => a.user.full_name.localeCompare(b.user.full_name, 'uk')),
+        [...data].sort((a, b) => {
+          // засновник зверху, потім за алфавітом
+          if (a.user_id === c.founder_user_id) return -1;
+          if (b.user_id === c.founder_user_id) return 1;
+          return a.user.full_name.localeCompare(b.user.full_name, 'uk');
+        }),
       );
       const me = data.find((m) => m.user_id === user?.id);
       setMyRole((me?.role.name as RoleName | undefined) ?? null);
+      setForbidden(false);
     } catch (err) {
-      setError(extractErrorMessage(err, 'Не вдалося завантажити учасників'));
+      const status = (err as { response?: { status?: number } })?.response?.status;
+      if (status === 403) {
+        setForbidden(true);
+        // Власну роль усе одно потрібно знати, щоб коректно показати повідомлення
+        try {
+          const me = await getMyMembership(communityId);
+          setMyRole((me?.role.name as RoleName | undefined) ?? null);
+        } catch {
+          // ОК
+        }
+      } else {
+        setError(extractErrorMessage(err, 'Не вдалося завантажити учасників'));
+      }
     }
   }, [communityId, user?.id]);
 
@@ -70,12 +108,13 @@ export default function MembersList() {
       try {
         setUnits(await listUnits(communityId, { includeInactive: true }));
       } catch {
-        // приміщення опційно — додавання учасника працює і без вибору юніта
+        // приміщення опційно
       }
     })();
   }, [communityId, reload]);
 
   const canManage = hasPermission(myRole, 'users:manage');
+  const isFounder = !!community && community.founder_user_id === user?.id;
 
   const handleRemove = async () => {
     if (!removing) return;
@@ -113,6 +152,44 @@ export default function MembersList() {
     }
   };
 
+  const handleTransfer = async (newFounderId: number) => {
+    try {
+      const updated = await transferFounder(communityId, {
+        new_founder_user_id: newFounderId,
+      });
+      setCommunity(updated);
+      setTransferOpen(false);
+      await reload();
+    } catch (err) {
+      throw new Error(extractErrorMessage(err, 'Не вдалося передати засновництво'));
+    }
+  };
+
+  if (forbidden) {
+    return (
+      <div className="space-y-4">
+        <Link
+          to={`/communities/${communityId}`}
+          className="inline-flex items-center gap-1 text-sm text-slate-600 hover:text-slate-900"
+        >
+          <ChevronLeft size={16} />
+          До спільноти
+        </Link>
+        <Alert tone="warning" title="Доступ обмежено">
+          Список учасників доступний лише ролям технічного працівника, бухгалтера
+          та голови. Для перегляду власної ролі скористайтеся розділом
+          «Особистий кабінет».
+        </Alert>
+      </div>
+    );
+  }
+
+  const otherHeads = (members ?? []).filter(
+    (m) =>
+      m.role.name === 'head' &&
+      m.user_id !== community?.founder_user_id,
+  );
+
   return (
     <div className="space-y-6">
       <Link
@@ -128,15 +205,34 @@ export default function MembersList() {
           <h2 className="text-2xl font-semibold text-slate-900">Учасники</h2>
           <p className="text-slate-600 mt-1 text-sm">
             Користувачі з ролями у цій спільноті. Голова правління керує
-            складом та може скидати паролі.
+            складом та може скидати паролі. Засновник позначений короною —
+            його не можна видалити, поки він не передасть засновництво іншому
+            голові.
           </p>
         </div>
-        {canManage && (
-          <Button onClick={() => setAddOpen(true)}>
-            <UserPlus size={16} />
-            Додати учасника
-          </Button>
-        )}
+        <div className="flex gap-2">
+          {isFounder && (
+            <Button
+              variant="secondary"
+              onClick={() => setTransferOpen(true)}
+              disabled={otherHeads.length === 0}
+              title={
+                otherHeads.length === 0
+                  ? 'Спочатку додайте ще одного голову правління'
+                  : 'Передати права засновника іншому голові'
+              }
+            >
+              <Send size={16} />
+              Передати засновництво
+            </Button>
+          )}
+          {canManage && (
+            <Button onClick={() => setAddOpen(true)}>
+              <UserPlus size={16} />
+              Додати учасника
+            </Button>
+          )}
+        </div>
       </header>
 
       {error && (
@@ -174,6 +270,7 @@ export default function MembersList() {
           members={members!}
           canManage={canManage}
           currentUserId={user?.id}
+          founderUserId={community?.founder_user_id ?? null}
           onReset={(m) => setResetting(m)}
           onRemove={(m) => setRemoving(m)}
         />
@@ -193,6 +290,13 @@ export default function MembersList() {
             description: `Згенеровано тимчасовий пароль для ${email}. Надайте його учаснику особисто.`,
           })
         }
+      />
+
+      <TransferFounderModal
+        open={transferOpen}
+        onClose={() => setTransferOpen(false)}
+        candidates={otherHeads}
+        onSubmit={handleTransfer}
       />
 
       <ConfirmDialog
@@ -254,6 +358,7 @@ interface MembersTableProps {
   members: UserRoleResponse[];
   canManage: boolean;
   currentUserId: number | undefined;
+  founderUserId: number | null;
   onReset: (m: UserRoleResponse) => void;
   onRemove: (m: UserRoleResponse) => void;
 }
@@ -262,6 +367,7 @@ function MembersTable({
   members,
   canManage,
   currentUserId,
+  founderUserId,
   onReset,
   onRemove,
 }: MembersTableProps) {
@@ -278,57 +384,80 @@ function MembersTable({
           </tr>
         </thead>
         <tbody className="divide-y divide-slate-100">
-          {members.map((m) => (
-            <tr key={m.id} className="hover:bg-slate-50">
-              <td className="px-5 py-3">
-                <div className="font-medium text-slate-900">{m.user.full_name}</div>
-                <div className="text-xs text-slate-500">{m.user.email}</div>
-                {m.user.phone && (
-                  <div className="text-xs text-slate-500 tabular-nums">{m.user.phone}</div>
-                )}
-              </td>
-              <td className="px-5 py-3">
-                <span className="badge badge-blue">
-                  {ROLE_DISPLAY[m.role.name as RoleName] ?? m.role.display_name}
-                </span>
-              </td>
-              <td className="px-5 py-3 text-slate-700">
-                {m.unit ? (
-                  <>
-                    №{m.unit.number}
-                    {!m.unit.is_active && (
-                      <span className="badge badge-slate ml-2">деактивовано</span>
+          {members.map((m) => {
+            const isFounder = founderUserId !== null && m.user_id === founderUserId;
+            const isSelf = m.user_id === currentUserId;
+            return (
+              <tr key={m.id} className="hover:bg-slate-50">
+                <td className="px-5 py-3">
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium text-slate-900">
+                      {m.user.full_name}
+                    </span>
+                    {isFounder && (
+                      <span
+                        className="inline-flex items-center gap-1 text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded text-xs"
+                        title="Засновник спільноти"
+                      >
+                        <Crown size={12} />
+                        Засновник
+                      </span>
                     )}
-                  </>
-                ) : (
-                  <span className="text-slate-400">—</span>
-                )}
-              </td>
-              <td className="px-5 py-3 text-slate-500 text-xs">
-                {formatDate(m.assigned_at)}
-              </td>
-              {canManage && (
-                <td className="px-5 py-3 text-right">
-                  <div className="inline-flex gap-1">
-                    <Button variant="ghost" size="sm" onClick={() => onReset(m)}>
-                      <KeyRound size={14} />
-                      Пароль
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => onRemove(m)}
-                      disabled={m.user_id === currentUserId}
-                      title={m.user_id === currentUserId ? 'Не можна видалити себе' : undefined}
-                    >
-                      <Trash2 size={14} />
-                      Видалити
-                    </Button>
                   </div>
+                  <div className="text-xs text-slate-500">{m.user.email}</div>
+                  {m.user.phone && (
+                    <div className="text-xs text-slate-500 tabular-nums">{m.user.phone}</div>
+                  )}
                 </td>
-              )}
-            </tr>
-          ))}
+                <td className="px-5 py-3">
+                  <span className="badge badge-blue">
+                    {ROLE_DISPLAY[m.role.name as RoleName] ?? m.role.display_name}
+                  </span>
+                </td>
+                <td className="px-5 py-3 text-slate-700">
+                  {m.unit ? (
+                    <>
+                      №{m.unit.number}
+                      {!m.unit.is_active && (
+                        <span className="badge badge-slate ml-2">деактивовано</span>
+                      )}
+                    </>
+                  ) : (
+                    <span className="text-slate-400">—</span>
+                  )}
+                </td>
+                <td className="px-5 py-3 text-slate-500 text-xs">
+                  {formatDate(m.assigned_at)}
+                </td>
+                {canManage && (
+                  <td className="px-5 py-3 text-right">
+                    <div className="inline-flex gap-1">
+                      <Button variant="ghost" size="sm" onClick={() => onReset(m)}>
+                        <KeyRound size={14} />
+                        Пароль
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => onRemove(m)}
+                        disabled={isSelf || isFounder}
+                        title={
+                          isFounder
+                            ? 'Засновника не можна видалити; спершу передайте засновництво'
+                            : isSelf
+                            ? 'Не можна видалити себе'
+                            : undefined
+                        }
+                      >
+                        <Trash2 size={14} />
+                        Видалити
+                      </Button>
+                    </div>
+                  </td>
+                )}
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>

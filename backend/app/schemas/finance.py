@@ -119,6 +119,34 @@ class PaymentResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class PaymentUpdate(BaseModel):
+    """Часткове оновлення платежу. Зміна суми або дати викликає перерахунок
+    FIFO для всіх платежів цього юніта."""
+    amount: Decimal | None = None
+    payment_date: date | None = None
+    description: str | None = None
+
+    @field_validator("amount")
+    @classmethod
+    def _validate_amount(cls, v: Decimal | None) -> Decimal | None:
+        if v is not None and v <= 0:
+            raise ValueError("amount must be > 0")
+        return v
+
+
+class ChargeUpdate(BaseModel):
+    """Дозволено змінювати лише суму. Помилка в типі чи періоді → видали і
+    створи нове нарахування."""
+    amount: Decimal
+
+    @field_validator("amount")
+    @classmethod
+    def _validate_amount(cls, v: Decimal) -> Decimal:
+        if v <= 0:
+            raise ValueError("amount must be > 0")
+        return v
+
+
 # --- BudgetItems ---
 
 class BudgetItemCreate(BaseModel):

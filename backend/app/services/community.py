@@ -6,9 +6,42 @@ from app.models.user_community_role import UserCommunityRole
 from app.schemas.community import CommunityCreate, CommunityUpdate, UnitCreate, UnitUpdate
 
 
-def create_community(db: Session, data: CommunityCreate) -> Community:
-    community = Community(**data.model_dump())
+def create_community(
+    db: Session, data: CommunityCreate, founder_user_id: int,
+) -> Community:
+    """Створює спільноту і фіксує засновника. Призначення head-ролі засновнику
+    виконується викликаючим кодом у тій самій транзакції."""
+    community = Community(**data.model_dump(), founder_user_id=founder_user_id)
     db.add(community)
+    db.commit()
+    db.refresh(community)
+    return community
+
+
+def transfer_founder(
+    db: Session, community: Community, new_founder_user_id: int,
+) -> Community:
+    """Передає право засновника іншому користувачу. Цільовий юзер має бути
+    head цієї спільноти, інакше ValueError."""
+    from app.models.role import Role
+
+    if new_founder_user_id == community.founder_user_id:
+        raise ValueError("Target user is already the founder")
+
+    membership = (
+        db.query(UserCommunityRole)
+        .join(Role, Role.id == UserCommunityRole.role_id)
+        .filter(
+            UserCommunityRole.user_id == new_founder_user_id,
+            UserCommunityRole.community_id == community.id,
+            Role.name == "head",
+        )
+        .first()
+    )
+    if membership is None:
+        raise ValueError("Target user must already be a head of this community")
+
+    community.founder_user_id = new_founder_user_id
     db.commit()
     db.refresh(community)
     return community

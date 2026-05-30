@@ -6,9 +6,11 @@ import type {
   ChargeCreate,
   ChargeType,
   ChargeTypeCreate,
+  ChargeUpdate,
   Payment,
   PaymentAllocation,
   PaymentCreate,
+  PaymentUpdate,
   UnitBalanceResponse,
   UnitPenaltyResponse,
 } from '../types/api';
@@ -38,10 +40,14 @@ export async function createChargeType(
 export async function listCharges(
   communityId: number,
   period?: string | null,
+  unitId?: number | null,
 ): Promise<Charge[]> {
+  const params: Record<string, string | number> = {};
+  if (period) params.period = period;
+  if (unitId !== null && unitId !== undefined) params.unit_id = unitId;
   const res = await apiClient.get<Charge[]>(
     `/communities/${communityId}/charges`,
-    { params: period ? { period } : {} },
+    { params },
   );
   return res.data;
 }
@@ -55,6 +61,25 @@ export async function createCharges(
     payload,
   );
   return res.data;
+}
+
+export async function updateCharge(
+  communityId: number,
+  chargeId: number,
+  payload: ChargeUpdate,
+): Promise<Charge> {
+  const res = await apiClient.patch<Charge>(
+    `/communities/${communityId}/charges/${chargeId}`,
+    payload,
+  );
+  return res.data;
+}
+
+export async function deleteCharge(
+  communityId: number,
+  chargeId: number,
+): Promise<void> {
+  await apiClient.delete(`/communities/${communityId}/charges/${chargeId}`);
 }
 
 // --- Payments ---
@@ -79,6 +104,25 @@ export async function createPayment(
     payload,
   );
   return res.data;
+}
+
+export async function updatePayment(
+  communityId: number,
+  paymentId: number,
+  payload: PaymentUpdate,
+): Promise<Payment> {
+  const res = await apiClient.patch<Payment>(
+    `/communities/${communityId}/payments/${paymentId}`,
+    payload,
+  );
+  return res.data;
+}
+
+export async function deletePayment(
+  communityId: number,
+  paymentId: number,
+): Promise<void> {
+  await apiClient.delete(`/communities/${communityId}/payments/${paymentId}`);
 }
 
 export async function listPaymentAllocations(

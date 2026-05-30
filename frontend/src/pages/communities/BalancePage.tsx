@@ -12,7 +12,7 @@ import {
   getBalance,
   getMyBalance,
 } from '../../api/finances';
-import { listMembers } from '../../api/roles';
+import { getMyMembership } from '../../api/communities';
 import { extractErrorMessage } from '../../api/client';
 import type { RoleName, UnitBalanceResponse } from '../../types/api';
 import { useAuth } from '../../auth/useAuth';
@@ -73,8 +73,7 @@ export default function BalancePage() {
     }
     (async () => {
       try {
-        const members = await listMembers(communityId);
-        const me = members.find((m) => m.user_id === user?.id);
+        const me = await getMyMembership(communityId);
         setMyRole((me?.role.name as RoleName | undefined) ?? null);
         setMyUnitId(me?.unit_id ?? null);
       } catch {

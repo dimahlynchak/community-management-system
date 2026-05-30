@@ -13,7 +13,7 @@ import {
   listUnits,
   updateUnit,
 } from '../../api/units';
-import { listMembers } from '../../api/communities';
+import { getMyMembership } from '../../api/communities';
 import { extractErrorMessage } from '../../api/client';
 import type { RoleName, Unit } from '../../types/api';
 import { useAuth } from '../../auth/useAuth';
@@ -66,8 +66,7 @@ export default function UnitsList() {
     void reload();
     (async () => {
       try {
-        const members = await listMembers(communityId);
-        const me = members.find((m) => m.user_id === user?.id);
+        const me = await getMyMembership(communityId);
         setMyRole((me?.role.name as RoleName | undefined) ?? null);
       } catch {
         // роль не визначена — дії редагування лишаться прихованими
