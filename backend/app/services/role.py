@@ -4,6 +4,8 @@ import string
 from sqlalchemy.orm import Session
 
 from app.core.security import hash_password
+from app.models.community import Community
+
 from app.models.role import Role
 from app.models.unit import Unit
 from app.models.user import User
@@ -27,15 +29,25 @@ def get_roles(db: Session) -> list[Role]:
     return db.query(Role).all()
 
 
+def _get_community_or_raise(db: Session, community_id: int) -> Community:
+    community = db.query(Community).filter(Community.id == community_id).first()
+    if community is None:
+        raise ValueError("Community not found")
+    return community
+
+
 def assign_role(
     db: Session, user_id: int, community_id: int, role_name: str, unit_id: int | None,
 ) -> UserCommunityRole:
-    """Призначає роль користувачу в спільноті. Якщо вказано unit_id —
-    перевіряє лише належність приміщення до спільноти. Деактивовані
-    (soft-deleted) приміщення допускаються: інколи треба прив'язати
-    колишнього мешканця, щоб він міг бачити та погашати свій історичний
-    борг через my-* ендпоінти. Нових нарахувань на такі приміщення все
-    одно не виставляється (фільтр у create_charges_for_community)."""
+    """Призначає роль користувачу в спільноті. Якщо вказано unit_id — перевіряє
+    лише належність приміщення до спільноти. Деактивовані (soft-deleted)
+    приміщення допускаються: інколи треба прив'язати колишнього мешканця, щоб
+    він міг бачити та погашати свій історичний борг через my-* ендпоінти.
+    Нових нарахувань на такі приміщення все одно не виставляється (фільтр у
+    create_charges_for_community).
+
+    Захист засновника: не можна призначити засновнику роль, відмінну від head —
+    це б позбавило його контролю над спільнотою. Спершу transfer_founder."""
     role = db.query(Role).filter(Role.name == role_name).first()
     if role is None:
         raise ValueError(f"Role '{role_name}' not found")
@@ -44,6 +56,10 @@ def assign_role(
         unit = db.query(Unit).filter(Unit.id == unit_id).first()
         if unit is None or unit.community_id != community_id:
             raise ValueError("Unit does not belong to this community")
+
+    community = _get_community_or_raise(db, community_id)
+    if community.founder_user_id == user_id and role_name != "head":
+        raise ValueError("Founder must retain the head role; transfer founder rights first")
 
     ucr = UserCommunityRole(
         user_id=user_id,
@@ -64,6 +80,16 @@ def get_community_members(db: Session, community_id: int) -> list[UserCommunityR
 
 
 def remove_role(db: Session, ucr: UserCommunityRole) -> None:
+    """Видаляє членство користувача у спільноті.
+
+    Захист засновника: членство засновника видалити не можна, поки він
+    лишається засновником. Спершу transfer_founder."""
+    community = _get_community_or_raise(db, ucr.community_id)
+
+    if community.founder_user_id == ucr.user_id:
+        raise ValueError(
+            "Cannot remove the founder's membership; transfer founder rights first"
+        )
     db.delete(ucr)
     db.commit()
 
@@ -100,7 +126,7 @@ def create_member_with_user(
         phone=phone,
     )
     db.add(user)
-    db.flush()  # отримуємо user.id без коміту, щоб assign_role йшов у тій самій транзакції
+    db.flush()
 
     try:
         membership = assign_role(db, user.id, community_id, role_name, unit_id)
@@ -114,9 +140,7 @@ def create_member_with_user(
 
 def reset_user_password_by_admin(db: Session, target_user_id: int) -> tuple[User, str]:
     """Голова скидає пароль учаснику. Генерує новий випадковий пароль,
-    оновлює хеш, відкликає всі активні refresh-токени цього юзера.
-    Повертає (user, new_password) — голова передає пароль особисто
-    поза програмою; зберігати його у БД у відкритому вигляді не можна."""
+    оновлює хеш, відкликає всі активні refresh-токени цього юзера."""
     user = db.query(User).filter(User.id == target_user_id).first()
     if user is None:
         raise ValueError("User not found")
@@ -127,3 +151,15 @@ def reset_user_password_by_admin(db: Session, target_user_id: int) -> tuple[User
     revoke_all_user_refresh_tokens(db, user.id)
     db.refresh(user)
     return user, new_password
+
+
+def get_my_membership(
+    db: Session, user_id: int, community_id: int,
+) -> UserCommunityRole | None:
+    """Повертає membership поточного користувача у спільноті, без перегляду
+    чужих даних. Використовується для визначення власної ролі без виклику
+    повного списку учасників (важливо для privacy резидентів)."""
+    return db.query(UserCommunityRole).filter(
+        UserCommunityRole.user_id == user_id,
+        UserCommunityRole.community_id == community_id,
+    ).first()

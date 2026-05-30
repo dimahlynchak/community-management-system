@@ -2,19 +2,23 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
   ChevronLeft,
+  Pencil,
   Plus,
   Receipt,
+  Trash2,
   Wallet,
 } from 'lucide-react';
 import {
   createChargeType,
   createCharges,
+  deleteCharge,
   getMyCharges,
   listChargeTypes,
   listCharges,
+  updateCharge,
 } from '../../api/finances';
 import { listUnits } from '../../api/units';
-import { listMembers } from '../../api/roles';
+import { getMyMembership } from '../../api/communities';
 import { extractErrorMessage } from '../../api/client';
 import type {
   Charge,
@@ -37,6 +41,8 @@ import ChargeTypeFormModal, {
   ChargeTypeFormData,
 } from '../../components/ChargeTypeFormModal';
 import GenerateChargesModal from '../../components/GenerateChargesModal';
+import ChargeEditModal from '../../components/ChargeEditModal';
+import ConfirmDialog from '../../components/ConfirmDialog';
 
 type UnitFilter = number | 'all';
 
@@ -56,6 +62,9 @@ export default function ChargesPage() {
   const [error, setError] = useState<string | null>(null);
   const [typeFormOpen, setTypeFormOpen] = useState(false);
   const [genOpen, setGenOpen] = useState(false);
+  const [editing, setEditing] = useState<Charge | null>(null);
+  const [removing, setRemoving] = useState<Charge | null>(null);
+  const [removeBusy, setRemoveBusy] = useState(false);
 
   const canReadAll = hasPermission(myRole, 'charges:read');
   const canReadOwn = hasPermission(myRole, 'own_charges:read');
@@ -95,8 +104,7 @@ export default function ChargesPage() {
     }
     (async () => {
       try {
-        const members = await listMembers(communityId);
-        const me = members.find((m) => m.user_id === user?.id);
+        const me = await getMyMembership(communityId);
         setMyRole((me?.role.name as RoleName | undefined) ?? null);
         setMyUnitId(me?.unit_id ?? null);
       } catch {
@@ -194,6 +202,34 @@ export default function ChargesPage() {
       };
     } catch (err) {
       throw new Error(extractErrorMessage(err, 'Не вдалося провести нарахування'));
+    }
+  };
+
+  const handleEditCharge = async (newAmount: string) => {
+    if (!editing) return;
+    try {
+      await updateCharge(communityId, editing.id, { amount: newAmount });
+      setEditing(null);
+      if (isPersonal) await loadMyCharges();
+      else await loadAdminCharges();
+    } catch (err) {
+      throw new Error(extractErrorMessage(err, 'Не вдалося оновити нарахування'));
+    }
+  };
+
+  const handleDeleteCharge = async () => {
+    if (!removing) return;
+    setRemoveBusy(true);
+    try {
+      await deleteCharge(communityId, removing.id);
+      setRemoving(null);
+      if (isPersonal) await loadMyCharges();
+      else await loadAdminCharges();
+    } catch (err) {
+      setError(extractErrorMessage(err, 'Не вдалося видалити нарахування'));
+      setRemoving(null);
+    } finally {
+      setRemoveBusy(false);
     }
   };
 
@@ -444,6 +480,9 @@ export default function ChargesPage() {
                 unitsById={unitsById}
                 typesById={typesById}
                 showUnit={!isPersonal}
+                canManage={!isPersonal && canCreateCharges}
+                onEdit={(c) => setEditing(c)}
+                onDelete={(c) => setRemoving(c)}
               />
             )}
           </div>
@@ -465,6 +504,36 @@ export default function ChargesPage() {
             units={units.filter((u) => u.is_active)}
             onSubmit={handleGenerate}
           />
+
+          <ChargeEditModal
+            open={editing !== null}
+            onClose={() => setEditing(null)}
+            charge={editing}
+            onSubmit={handleEditCharge}
+          />
+
+          <ConfirmDialog
+            open={removing !== null}
+            title="Видалити нарахування"
+            message={
+              removing ? (
+                <>
+                  Нарахування за{' '}
+                  <strong>{removing.period}</strong> на суму{' '}
+                  <strong>{removing.amount}</strong> грн буде видалено.
+                  FIFO-розподіл платежів цього юніта перерахується автоматично.
+                  Дію скасувати не можна.
+                </>
+              ) : (
+                ''
+              )
+            }
+            confirmLabel="Видалити"
+            confirmVariant="danger"
+            busy={removeBusy}
+            onConfirm={handleDeleteCharge}
+            onCancel={() => setRemoving(null)}
+          />
         </>
       )}
     </div>
@@ -476,9 +545,20 @@ interface ChargesTableProps {
   unitsById: Map<number, Unit>;
   typesById: Map<number, ChargeType>;
   showUnit: boolean;
+  canManage: boolean;
+  onEdit: (c: Charge) => void;
+  onDelete: (c: Charge) => void;
 }
 
-function ChargesTable({ charges, unitsById, typesById, showUnit }: ChargesTableProps) {
+function ChargesTable({
+  charges,
+  unitsById,
+  typesById,
+  showUnit,
+  canManage,
+  onEdit,
+  onDelete,
+}: ChargesTableProps) {
   const sorted = [...charges].sort((a, b) => {
     if (a.period !== b.period) return b.period.localeCompare(a.period);
     const an = unitsById.get(a.unit_id)?.number ?? '';
@@ -496,6 +576,9 @@ function ChargesTable({ charges, unitsById, typesById, showUnit }: ChargesTableP
             )}
             <th className="text-left px-3 py-2 font-medium">Тариф</th>
             <th className="text-right px-3 py-2 font-medium">Сума</th>
+            {canManage && (
+              <th className="text-right px-3 py-2 font-medium">Дії</th>
+            )}
           </tr>
         </thead>
         <tbody className="divide-y divide-slate-100">
@@ -523,6 +606,18 @@ function ChargesTable({ charges, unitsById, typesById, showUnit }: ChargesTableP
                 <td className="px-3 py-2 text-right tabular-nums font-medium text-slate-900">
                   {formatMoney(c.amount)}
                 </td>
+                {canManage && (
+                  <td className="px-3 py-2 text-right">
+                    <div className="inline-flex gap-1">
+                      <Button variant="ghost" size="sm" onClick={() => onEdit(c)}>
+                        <Pencil size={14} />
+                      </Button>
+                      <Button variant="ghost" size="sm" onClick={() => onDelete(c)}>
+                        <Trash2 size={14} />
+                      </Button>
+                    </div>
+                  </td>
+                )}
               </tr>
             );
           })}

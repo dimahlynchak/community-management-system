@@ -154,10 +154,17 @@ def create_charges_for_community(
     return charges
 
 
-def get_charges_by_community(db: Session, community_id: int, period: str | None = None) -> list[Charge]:
+def get_charges_by_community(
+    db: Session,
+    community_id: int,
+    period: str | None = None,
+    unit_id: int | None = None,
+) -> list[Charge]:
     query = db.query(Charge).join(Unit).filter(Unit.community_id == community_id)
     if period:
         query = query.filter(Charge.period == period)
+    if unit_id is not None:
+        query = query.filter(Charge.unit_id == unit_id)
     return query.all()
 
 
@@ -222,6 +229,111 @@ def create_payment(db: Session, data: PaymentCreate, user_id: int) -> Payment:
     return payment
 
 
+def _recalculate_allocations_for_unit(db: Session, unit_id: int) -> None:
+    """Перерозподіляє ВСІ платежі юніта FIFO заново: видаляє всі поточні
+    payment_allocations цих платежів, потім послідовно по даті їхньої появи
+    кладе на найстаріші непогашені нарахування цього юніта.
+
+    Викликається після UPDATE/DELETE charge або UPDATE amount/date payment —
+    коли структура боргу/оплат змінилася і попередній розподіл вже
+    нерелевантний. Не комітить — це робить викликаючий код."""
+    payments = (
+        db.query(Payment)
+        .filter(Payment.unit_id == unit_id)
+        .order_by(Payment.payment_date, Payment.created_at, Payment.id)
+        .all()
+    )
+    if not payments:
+        return
+    payment_ids = [p.id for p in payments]
+    db.query(PaymentAllocation).filter(
+        PaymentAllocation.payment_id.in_(payment_ids)
+    ).delete(synchronize_session=False)
+    db.flush()
+    for payment in payments:
+        _allocate_payment_fifo(db, payment)
+
+
+def get_charge(db: Session, charge_id: int) -> Charge | None:
+    return db.query(Charge).filter(Charge.id == charge_id).first()
+
+
+def update_charge_amount(db: Session, charge: Charge, new_amount: Decimal) -> Charge:
+    """Оновлює суму нарахування і перераховує FIFO-розподіл усіх платежів
+    юніта (нова сума → інша картина непогашеного боргу). Період і тип не
+    змінюються — якщо помилка в них, видаліть і створіть наново."""
+    if new_amount <= Decimal("0"):
+        raise ValueError("amount must be positive")
+    charge.amount = new_amount.quantize(Decimal("0.01"))
+    db.flush()
+    _recalculate_allocations_for_unit(db, charge.unit_id)
+    db.commit()
+    db.refresh(charge)
+    return charge
+
+
+def delete_charge(db: Session, charge: Charge) -> int:
+    """Видаляє нарахування. Звільнені платежі цього юніта автоматично
+    перерозподіляються FIFO на інші непогашені charges. Повертає unit_id
+    для аудиту після видалення."""
+    unit_id = charge.unit_id
+    db.query(PaymentAllocation).filter(
+        PaymentAllocation.charge_id == charge.id
+    ).delete(synchronize_session=False)
+    db.delete(charge)
+    db.flush()
+    _recalculate_allocations_for_unit(db, unit_id)
+    db.commit()
+    return unit_id
+
+
+def get_payment(db: Session, payment_id: int) -> Payment | None:
+    return db.query(Payment).filter(Payment.id == payment_id).first()
+
+
+def update_payment(
+    db: Session,
+    payment: Payment,
+    new_amount: Decimal | None,
+    new_date: date | None,
+    new_description: str | None,
+    description_explicit: bool,
+) -> Payment:
+    """Оновлює платіж. При зміні суми або дати — перераховує FIFO усіх платежів
+    юніта (бо порядок або обсяг розподілу зміниться)."""
+    structural_change = False
+    if new_amount is not None:
+        if new_amount <= Decimal("0"):
+            raise ValueError("amount must be positive")
+        payment.amount = new_amount.quantize(Decimal("0.01"))
+        structural_change = True
+    if new_date is not None:
+        payment.payment_date = new_date
+        structural_change = True
+    if description_explicit:
+        payment.description = new_description
+    db.flush()
+    if structural_change:
+        _recalculate_allocations_for_unit(db, payment.unit_id)
+    db.commit()
+    db.refresh(payment)
+    return payment
+
+
+def delete_payment(db: Session, payment: Payment) -> int:
+    """Видаляє платіж разом з його розподілом. Інші платежі юніта
+    перерозподіляються FIFO заново. Повертає unit_id."""
+    unit_id = payment.unit_id
+    db.query(PaymentAllocation).filter(
+        PaymentAllocation.payment_id == payment.id
+    ).delete(synchronize_session=False)
+    db.delete(payment)
+    db.flush()
+    _recalculate_allocations_for_unit(db, unit_id)
+    db.commit()
+    return unit_id
+
+
 def get_payments_by_unit(db: Session, unit_id: int) -> list[Payment]:
     return db.query(Payment).filter(Payment.unit_id == unit_id).all()
 
@@ -233,27 +345,38 @@ def get_allocations_by_payment(db: Session, payment_id: int) -> list[PaymentAllo
 # --- Balance ---
 
 def get_balance_for_community(db: Session, community_id: int) -> list[dict]:
+    """Підсумкові баланси по всіх юнітах спільноти (включно з деактивованими —
+    для збереження історичного боргу). Реалізовано двома агрегаційними
+    запитами замість N+1 (по одному на юніт), що критично для спільнот з
+    сотнями приміщень і тисячами charges/payments."""
     units = db.query(Unit).filter(Unit.community_id == community_id).all()
+    if not units:
+        return []
+    unit_ids = [u.id for u in units]
+
+    charged_by_unit = dict(
+        db.query(Charge.unit_id, func.sum(Charge.amount))
+        .filter(Charge.unit_id.in_(unit_ids))
+        .group_by(Charge.unit_id)
+        .all()
+    )
+    paid_by_unit = dict(
+        db.query(Payment.unit_id, func.sum(Payment.amount))
+        .filter(Payment.unit_id.in_(unit_ids))
+        .group_by(Payment.unit_id)
+        .all()
+    )
+
     results = []
     for unit in units:
-        total_charged = (
-            db.query(func.sum(Charge.amount))
-            .filter(Charge.unit_id == unit.id)
-            .scalar()
-        ) or Decimal("0")
-
-        total_paid = (
-            db.query(func.sum(Payment.amount))
-            .filter(Payment.unit_id == unit.id)
-            .scalar()
-        ) or Decimal("0")
-
+        total_charged = (charged_by_unit.get(unit.id) or Decimal("0")).quantize(Decimal("0.01"))
+        total_paid = (paid_by_unit.get(unit.id) or Decimal("0")).quantize(Decimal("0.01"))
         results.append({
             "unit_id": unit.id,
             "unit_number": unit.number,
             "unit_type": unit.type,
-            "total_charged": total_charged.quantize(Decimal("0.01")),
-            "total_paid": total_paid.quantize(Decimal("0.01")),
+            "total_charged": total_charged,
+            "total_paid": total_paid,
             "balance": (total_paid - total_charged).quantize(Decimal("0.01")),
         })
     return results
@@ -290,42 +413,58 @@ def _last_day_of_period(period: str) -> date:
 def calculate_penalties(
     db: Session, community_id: int, rate: Decimal, as_of_date: date | None = None,
 ) -> list[dict]:
+    """Розрахунок пені для всіх боржників спільноти. Оптимізовано: усі charges
+    і allocations завантажуються двома запитами (без N+1 по юнітах). Для
+    спільнот з сотнями приміщень і тисячами charges це різниця між сотнями
+    запитів і двома."""
     if as_of_date is None:
         as_of_date = date.today()
 
     units = db.query(Unit).filter(Unit.community_id == community_id).all()
+    if not units:
+        return []
+    units_by_id = {u.id: u for u in units}
+    unit_ids = list(units_by_id.keys())
+
+    charges = (
+        db.query(Charge)
+        .filter(Charge.unit_id.in_(unit_ids))
+        .order_by(Charge.unit_id, Charge.period, Charge.created_at)
+        .all()
+    )
+    if not charges:
+        return []
+
+    charge_ids = [c.id for c in charges]
+    allocated_by_charge = dict(
+        db.query(PaymentAllocation.charge_id, func.sum(PaymentAllocation.amount))
+        .filter(PaymentAllocation.charge_id.in_(charge_ids))
+        .group_by(PaymentAllocation.charge_id)
+        .all()
+    )
+
     results = []
-    for unit in units:
-        charges = (
-            db.query(Charge)
-            .filter(Charge.unit_id == unit.id)
-            .order_by(Charge.period, Charge.created_at)
-            .all()
-        )
-        for charge in charges:
-            allocated = (
-                db.query(func.sum(PaymentAllocation.amount))
-                .filter(PaymentAllocation.charge_id == charge.id)
-                .scalar()
-            ) or Decimal("0")
-            debt = charge.amount - allocated
-            if debt <= Decimal("0"):
-                continue
-            last_day = _last_day_of_period(charge.period)
-            overdue_days = (as_of_date - last_day).days
-            if overdue_days <= 0:
-                continue
-            penalty = (debt * rate * overdue_days).quantize(Decimal("0.01"))
-            results.append({
-                "unit_id": unit.id,
-                "unit_number": unit.number,
-                "charge_id": charge.id,
-                "period": charge.period,
-                "debt": debt.quantize(Decimal("0.01")),
-                "overdue_days": overdue_days,
-                "rate": rate,
-                "penalty": penalty,
-            })
+    for charge in charges:
+        allocated = allocated_by_charge.get(charge.id) or Decimal("0")
+        debt = charge.amount - allocated
+        if debt <= Decimal("0"):
+            continue
+        last_day = _last_day_of_period(charge.period)
+        overdue_days = (as_of_date - last_day).days
+        if overdue_days <= 0:
+            continue
+        unit = units_by_id[charge.unit_id]
+        penalty = (debt * rate * overdue_days).quantize(Decimal("0.01"))
+        results.append({
+            "unit_id": unit.id,
+            "unit_number": unit.number,
+            "charge_id": charge.id,
+            "period": charge.period,
+            "debt": debt.quantize(Decimal("0.01")),
+            "overdue_days": overdue_days,
+            "rate": rate,
+            "penalty": penalty,
+        })
     return results
 
 

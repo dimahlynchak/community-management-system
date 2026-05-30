@@ -24,8 +24,13 @@ export interface Community {
   name: string;
   address: string;
   edrpou: string | null;
+  founder_user_id: number;
   created_at: string;
   updated_at: string;
+}
+
+export interface TransferFounderRequest {
+  new_founder_user_id: number;
 }
 
 export interface CommunityCreate {
@@ -182,6 +187,16 @@ export interface PaymentAllocation {
   payment_id: number;
   charge_id: number;
   amount: string;
+}
+
+export interface ChargeUpdate {
+  amount: string | number;
+}
+
+export interface PaymentUpdate {
+  amount?: string | number | null;
+  payment_date?: string | null;
+  description?: string | null;
 }
 
 export interface UnitBalanceResponse {

@@ -3,12 +3,15 @@ import { Link, useParams } from 'react-router-dom';
 import {
   CheckCircle2,
   ChevronLeft,
+  ChevronRight,
+  Download,
   ScrollText,
   ShieldCheck,
   ShieldOff,
   XCircle,
 } from 'lucide-react';
-import { listAuditLog, verifyAuditChain } from '../../api/audit';
+import { exportAuditLog, listAuditLog, verifyAuditChain } from '../../api/audit';
+import { downloadBlob } from '../../utils/download';
 import { listMembers } from '../../api/roles';
 import { extractErrorMessage } from '../../api/client';
 import type {
@@ -68,7 +71,7 @@ const ACTION_TONE: Record<string, string> = {
   REMOVE_ROLE: 'bg-violet-50 text-violet-700 border border-violet-200',
 };
 
-const LIMIT_OPTIONS = [50, 100, 200];
+const LIMIT_OPTIONS = [50, 100, 200, 500, 1000];
 
 export default function AuditPage() {
   const { id } = useParams<{ id: string }>();
@@ -76,6 +79,8 @@ export default function AuditPage() {
   const { user } = useAuth();
 
   const [entries, setEntries] = useState<AuditLogEntry[] | null>(null);
+  const [total, setTotal] = useState<number>(0);
+  const [offset, setOffset] = useState<number>(0);
   const [actionFilter, setActionFilter] = useState<'' | AuditAction>('');
   const [resourceFilter, setResourceFilter] = useState<string>('');
   const [limit, setLimit] = useState<number>(50);
@@ -84,6 +89,7 @@ export default function AuditPage() {
   const [membershipLoaded, setMembershipLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [exporting, setExporting] = useState<'csv' | 'xlsx' | null>(null);
   const [verifying, setVerifying] = useState(false);
   const [verifyResult, setVerifyResult] = useState<AuditVerifyResponse | null>(null);
   const [detailFor, setDetailFor] = useState<AuditLogEntry | null>(null);
@@ -94,19 +100,21 @@ export default function AuditPage() {
     setLoading(true);
     setError(null);
     try {
-      const data = await listAuditLog({
+      const page = await listAuditLog({
         community_id: communityId,
         action: actionFilter || null,
         resource: resourceFilter || null,
         limit,
+        offset,
       });
-      setEntries(data);
+      setEntries(page.items);
+      setTotal(page.total);
     } catch (err) {
       setError(extractErrorMessage(err, 'Не вдалося завантажити журнал аудиту'));
     } finally {
       setLoading(false);
     }
-  }, [communityId, actionFilter, resourceFilter, limit]);
+  }, [communityId, actionFilter, resourceFilter, limit, offset]);
 
   useEffect(() => {
     if (!Number.isFinite(communityId) || communityId <= 0) {
@@ -127,11 +135,28 @@ export default function AuditPage() {
     })();
   }, [communityId, user?.id]);
 
+  // При зміні фільтрів повертаємось на першу сторінку
+  useEffect(() => {
+    setOffset(0);
+  }, [actionFilter, resourceFilter, limit]);
+
   useEffect(() => {
     if (membershipLoaded && canRead) {
       void load();
     }
   }, [membershipLoaded, canRead, load]);
+
+  const handleExport = async (format: 'csv' | 'xlsx') => {
+    setExporting(format);
+    try {
+      const blob = await exportAuditLog(communityId, format);
+      downloadBlob(blob, `audit_${communityId}.${format}`);
+    } catch (err) {
+      setError(extractErrorMessage(err, 'Не вдалося експортувати журнал'));
+    } finally {
+      setExporting(null);
+    }
+  };
 
   const usersById = useMemo(() => {
     const map = new Map<number, { full_name: string; email: string }>();
@@ -199,16 +224,38 @@ export default function AuditPage() {
             доказовість для перевірки.
           </p>
         </div>
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={() => void handleVerify()}
-          disabled={verifying}
-          title="Перерахувати hash chain для всіх записів"
-        >
-          <ShieldCheck size={14} />
-          {verifying ? 'Перевірка…' : 'Перевірити ланцюг'}
-        </Button>
+        <div className="flex gap-2">
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => void handleExport('csv')}
+            disabled={exporting !== null}
+            title="Завантажити весь журнал у CSV"
+          >
+            <Download size={14} />
+            {exporting === 'csv' ? 'CSV…' : 'CSV'}
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => void handleExport('xlsx')}
+            disabled={exporting !== null}
+            title="Завантажити весь журнал у XLSX"
+          >
+            <Download size={14} />
+            {exporting === 'xlsx' ? 'XLSX…' : 'XLSX'}
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => void handleVerify()}
+            disabled={verifying}
+            title="Перерахувати hash chain для всіх записів"
+          >
+            <ShieldCheck size={14} />
+            {verifying ? 'Перевірка…' : 'Перевірити ланцюг'}
+          </Button>
+        </div>
       </header>
 
       {error && (
@@ -251,7 +298,9 @@ export default function AuditPage() {
           <div className="flex items-center gap-2">
             <ScrollText className="text-brand-600" size={18} />
             <h3 className="text-base font-semibold text-slate-900">
-              Записи {entries ? `(${entries.length})` : ''}
+              Записи{entries && total > 0
+                ? ` (${offset + 1}–${Math.min(offset + entries.length, total)} з ${total})`
+                : ''}
             </h3>
           </div>
         </div>
@@ -421,6 +470,35 @@ export default function AuditPage() {
                   })}
                 </tbody>
               </table>
+            </div>
+          )}
+
+          {entries && total > limit && (
+            <div className="flex items-center justify-between gap-3 pt-2 border-t border-slate-100">
+              <div className="text-xs text-slate-500 tabular-nums">
+                Сторінка {Math.floor(offset / limit) + 1} з{' '}
+                {Math.max(1, Math.ceil(total / limit))}
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => setOffset(Math.max(0, offset - limit))}
+                  disabled={offset === 0 || loading}
+                >
+                  <ChevronLeft size={14} />
+                  Попередня
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => setOffset(offset + limit)}
+                  disabled={offset + limit >= total || loading}
+                >
+                  Наступна
+                  <ChevronRight size={14} />
+                </Button>
+              </div>
             </div>
           )}
         </div>

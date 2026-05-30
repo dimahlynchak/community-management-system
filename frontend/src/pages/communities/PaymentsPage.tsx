@@ -1,14 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { ChevronLeft, ListChecks, Plus, Receipt } from 'lucide-react';
+import { ChevronLeft, ListChecks, Pencil, Plus, Receipt, Trash2 } from 'lucide-react';
 import {
   createPayment,
+  deletePayment,
   getMyPayments,
   listPaymentAllocations,
   listPayments,
+  updatePayment,
 } from '../../api/finances';
 import { listUnits } from '../../api/units';
-import { listMembers } from '../../api/roles';
+import { getMyMembership } from '../../api/communities';
 import { extractErrorMessage } from '../../api/client';
 import type {
   Payment,
@@ -29,6 +31,9 @@ import Modal from '../../components/Modal';
 import PaymentFormModal, {
   PaymentFormData,
 } from '../../components/PaymentFormModal';
+import PaymentEditModal from '../../components/PaymentEditModal';
+import ConfirmDialog from '../../components/ConfirmDialog';
+import type { PaymentUpdate } from '../../types/api';
 
 type UnitFilter = number | 'all' | '';
 
@@ -48,6 +53,9 @@ export default function PaymentsPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [allocationsFor, setAllocationsFor] = useState<Payment | null>(null);
   const [allocations, setAllocations] = useState<PaymentAllocation[] | null>(null);
+  const [editing, setEditing] = useState<Payment | null>(null);
+  const [removing, setRemoving] = useState<Payment | null>(null);
+  const [removeBusy, setRemoveBusy] = useState(false);
 
   const canCreate = hasPermission(myRole, 'payments:create');
   const canReadAll = hasPermission(myRole, 'payments:read');
@@ -103,8 +111,7 @@ export default function PaymentsPage() {
     }
     (async () => {
       try {
-        const members = await listMembers(communityId);
-        const me = members.find((m) => m.user_id === user?.id);
+        const me = await getMyMembership(communityId);
         setMyRole((me?.role.name as RoleName | undefined) ?? null);
         setMyUnitId(me?.unit_id ?? null);
       } catch {
@@ -186,6 +193,40 @@ export default function PaymentsPage() {
     } catch (err) {
       setError(extractErrorMessage(err, 'Не вдалося завантажити розподіл'));
       setAllocations([]);
+    }
+  };
+
+  const handleEditPayment = async (payload: PaymentUpdate) => {
+    if (!editing) return;
+    try {
+      await updatePayment(communityId, editing.id, payload);
+      setEditing(null);
+      if (isPersonal) {
+        await loadMyPayments();
+      } else if (unitId !== '') {
+        await loadAdminPayments(unitId, units);
+      }
+    } catch (err) {
+      throw new Error(extractErrorMessage(err, 'Не вдалося оновити платіж'));
+    }
+  };
+
+  const handleDeletePayment = async () => {
+    if (!removing) return;
+    setRemoveBusy(true);
+    try {
+      await deletePayment(communityId, removing.id);
+      setRemoving(null);
+      if (isPersonal) {
+        await loadMyPayments();
+      } else if (unitId !== '') {
+        await loadAdminPayments(unitId, units);
+      }
+    } catch (err) {
+      setError(extractErrorMessage(err, 'Не вдалося видалити платіж'));
+      setRemoving(null);
+    } finally {
+      setRemoveBusy(false);
     }
   };
 
@@ -392,14 +433,36 @@ export default function PaymentsPage() {
                             {p.description ?? <span className="text-slate-400">—</span>}
                           </td>
                           <td className="px-3 py-2 text-right">
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => void openAllocations(p)}
-                            >
-                              <ListChecks size={14} />
-                              Деталі
-                            </Button>
+                            <div className="inline-flex gap-1">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => void openAllocations(p)}
+                                title="Розподіл платежу"
+                              >
+                                <ListChecks size={14} />
+                              </Button>
+                              {canCreate && (
+                                <>
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => setEditing(p)}
+                                    title="Редагувати"
+                                  >
+                                    <Pencil size={14} />
+                                  </Button>
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => setRemoving(p)}
+                                    title="Видалити"
+                                  >
+                                    <Trash2 size={14} />
+                                  </Button>
+                                </>
+                              )}
+                            </div>
                           </td>
                         </tr>
                       );
@@ -475,6 +538,36 @@ export default function PaymentsPage() {
           </div>
         )}
       </Modal>
+
+      <PaymentEditModal
+        open={editing !== null}
+        onClose={() => setEditing(null)}
+        payment={editing}
+        onSubmit={handleEditPayment}
+      />
+
+      <ConfirmDialog
+        open={removing !== null}
+        title="Видалити платіж"
+        message={
+          removing ? (
+            <>
+              Платіж від <strong>{formatDate(removing.payment_date)}</strong> на
+              суму <strong>{formatMoney(removing.amount)}</strong> буде
+              видалено. Інші платежі цього юніта перерозподіляться FIFO заново
+              — відповідні нарахування можуть знову стати непогашеними. Дію
+              скасувати не можна.
+            </>
+          ) : (
+            ''
+          )
+        }
+        confirmLabel="Видалити"
+        confirmVariant="danger"
+        busy={removeBusy}
+        onConfirm={handleDeletePayment}
+        onCancel={() => setRemoving(null)}
+      />
     </div>
   );
 }

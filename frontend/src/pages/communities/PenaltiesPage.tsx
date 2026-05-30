@@ -2,7 +2,7 @@ import { FormEvent, useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { AlertTriangle, ChevronLeft } from 'lucide-react';
 import { calculatePenalties } from '../../api/finances';
-import { listMembers } from '../../api/roles';
+import { getMyMembership } from '../../api/communities';
 import { extractErrorMessage } from '../../api/client';
 import type { RoleName, UnitPenaltyResponse } from '../../types/api';
 import { useAuth } from '../../auth/useAuth';
@@ -52,8 +52,7 @@ export default function PenaltiesPage() {
     void load(Number(DEFAULT_RATE), todayISO());
     (async () => {
       try {
-        const members = await listMembers(communityId);
-        const me = members.find((m) => m.user_id === user?.id);
+        const me = await getMyMembership(communityId);
         setMyRole((me?.role.name as RoleName | undefined) ?? null);
       } catch {
         // не критично

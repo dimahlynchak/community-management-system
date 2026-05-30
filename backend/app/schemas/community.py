@@ -62,10 +62,17 @@ class CommunityResponse(BaseModel):
     name: str
     address: str
     edrpou: str | None
+    founder_user_id: int
     created_at: datetime
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class TransferFounderRequest(BaseModel):
+    """Засновник передає права новому користувачу. Новий засновник має вже
+    мати роль head у цій спільноті."""
+    new_founder_user_id: int
 
 
 class UnitCreate(BaseModel):

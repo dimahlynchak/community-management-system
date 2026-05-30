@@ -5,7 +5,7 @@ import {
   createAnnouncement,
   listAnnouncements,
 } from '../../api/announcements';
-import { listMembers } from '../../api/roles';
+import { getMyMembership } from '../../api/communities';
 import { extractErrorMessage } from '../../api/client';
 import type { Announcement, RoleName } from '../../types/api';
 import { useAuth } from '../../auth/useAuth';
@@ -46,8 +46,7 @@ export default function AnnouncementsList() {
     void reload();
     (async () => {
       try {
-        const members = await listMembers(communityId);
-        const me = members.find((m) => m.user_id === user?.id);
+        const me = await getMyMembership(communityId);
         setMyRole((me?.role.name as RoleName | undefined) ?? null);
       } catch {
         // ролі без потреби — кнопка створення просто не покажеться
