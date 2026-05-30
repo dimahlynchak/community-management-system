@@ -6,7 +6,12 @@ import {
   FileBarChart,
   FileText,
 } from 'lucide-react';
-import { exportBalance, getBalance } from '../../api/finances';
+import {
+  exportBalance,
+  exportMyBalance,
+  getBalance,
+  getMyBalance,
+} from '../../api/finances';
 import { listMembers } from '../../api/roles';
 import { extractErrorMessage } from '../../api/client';
 import type { RoleName, UnitBalanceResponse } from '../../types/api';
@@ -18,6 +23,7 @@ import { unitTypeLabel } from '../../data/unitTypes';
 import Alert from '../../components/Alert';
 import Button from '../../components/Button';
 import Spinner from '../../components/Spinner';
+import EmptyState from '../../components/EmptyState';
 
 export default function BalancePage() {
   const { id } = useParams<{ id: string }>();
@@ -26,10 +32,16 @@ export default function BalancePage() {
 
   const [rows, setRows] = useState<UnitBalanceResponse[] | null>(null);
   const [myRole, setMyRole] = useState<RoleName | null>(null);
+  const [myUnitId, setMyUnitId] = useState<number | null>(null);
+  const [membershipLoaded, setMembershipLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [exporting, setExporting] = useState<'xlsx' | 'pdf' | null>(null);
 
-  const load = useCallback(async () => {
+  const canReadAll = hasPermission(myRole, 'reports:generate');
+  const canReadOwn = hasPermission(myRole, 'own_charges:read');
+  const isPersonal = membershipLoaded && !canReadAll && canReadOwn;
+
+  const loadAdmin = useCallback(async () => {
     setError(null);
     try {
       const data = await getBalance(communityId);
@@ -43,31 +55,57 @@ export default function BalancePage() {
     }
   }, [communityId]);
 
+  const loadPersonal = useCallback(async () => {
+    setError(null);
+    try {
+      const row = await getMyBalance(communityId);
+      setRows([row]);
+    } catch (err) {
+      setError(extractErrorMessage(err, 'Не вдалося завантажити ваш баланс'));
+      setRows([]);
+    }
+  }, [communityId]);
+
   useEffect(() => {
     if (!Number.isFinite(communityId) || communityId <= 0) {
       setError('Невірний ідентифікатор спільноти');
       return;
     }
-    void load();
     (async () => {
       try {
         const members = await listMembers(communityId);
         const me = members.find((m) => m.user_id === user?.id);
         setMyRole((me?.role.name as RoleName | undefined) ?? null);
+        setMyUnitId(me?.unit_id ?? null);
       } catch {
-        // без role permissions кнопки експорту не з’являться
+        // без ролі — не показуємо ні кнопок експорту, ні даних
+      } finally {
+        setMembershipLoaded(true);
       }
     })();
-  }, [communityId, load, user?.id]);
+  }, [communityId, user?.id]);
 
-  const canExport = hasPermission(myRole, 'reports:generate');
+  useEffect(() => {
+    if (!membershipLoaded) return;
+    if (isPersonal) {
+      if (myUnitId !== null) {
+        void loadPersonal();
+      } else {
+        setRows([]);
+      }
+    } else if (canReadAll) {
+      void loadAdmin();
+    }
+  }, [membershipLoaded, isPersonal, canReadAll, myUnitId, loadAdmin, loadPersonal]);
 
   const handleExport = async (format: 'xlsx' | 'pdf') => {
     setExporting(format);
     try {
-      const blob = await exportBalance(communityId, format);
-      const filename = `balance_${communityId}.${format}`;
-      downloadBlob(blob, filename);
+      const blob = isPersonal
+        ? await exportMyBalance(communityId, format)
+        : await exportBalance(communityId, format);
+      const prefix = isPersonal ? 'my_balance' : `balance_${communityId}`;
+      downloadBlob(blob, `${prefix}.${format}`);
     } catch (err) {
       setError(extractErrorMessage(err, 'Не вдалося завантажити файл'));
     } finally {
@@ -87,6 +125,33 @@ export default function BalancePage() {
       )
     : null;
 
+  if (!membershipLoaded) {
+    return (
+      <div className="flex justify-center py-12">
+        <Spinner label="Завантаження…" />
+      </div>
+    );
+  }
+
+  if (!canReadAll && !canReadOwn) {
+    return (
+      <div className="space-y-4">
+        <Link
+          to={`/communities/${communityId}`}
+          className="inline-flex items-center gap-1 text-sm text-slate-600 hover:text-slate-900"
+        >
+          <ChevronLeft size={16} />
+          До спільноти
+        </Link>
+        <Alert tone="error" title="Доступ обмежено">
+          У вас немає дозволу переглядати фінансову відомість цієї спільноти.
+        </Alert>
+      </div>
+    );
+  }
+
+  const showExport = (canReadAll || isPersonal) && rows && rows.length > 0;
+
   return (
     <div className="space-y-6">
       <Link
@@ -99,13 +164,16 @@ export default function BalancePage() {
 
       <header className="flex items-end justify-between gap-4">
         <div>
-          <h2 className="text-2xl font-semibold text-slate-900">Боргова відомість</h2>
+          <h2 className="text-2xl font-semibold text-slate-900">
+            {isPersonal ? 'Мій баланс' : 'Боргова відомість'}
+          </h2>
           <p className="text-slate-600 mt-1 text-sm">
-            Сальдо по кожному приміщенню: нараховано / оплачено / баланс.
-            Додатний баланс — переплата, від’ємний — заборгованість.
+            {isPersonal
+              ? 'Сальдо по вашому приміщенню: нараховано / оплачено / баланс. Додатний баланс — переплата, відʼємний — заборгованість.'
+              : 'Сальдо по кожному приміщенню: нараховано / оплачено / баланс. Додатний баланс — переплата, відʼємний — заборгованість.'}
           </p>
         </div>
-        {canExport && rows && rows.length > 0 && (
+        {showExport && (
           <div className="flex gap-2">
             <Button
               variant="secondary"
@@ -135,7 +203,17 @@ export default function BalancePage() {
         </Alert>
       )}
 
-      {rows === null && !error ? (
+      {isPersonal && myUnitId === null ? (
+        <div className="card">
+          <div className="card-body">
+            <EmptyState
+              icon={FileBarChart}
+              title="Приміщення ще не призначено"
+              description="До вашого членства в цій спільноті не привʼязане жодне приміщення. Зверніться до голови правління, щоб вас закріпили за квартирою або приміщенням."
+            />
+          </div>
+        </div>
+      ) : rows === null && !error ? (
         <div className="flex justify-center py-12">
           <Spinner label="Завантаження…" />
         </div>
@@ -144,7 +222,11 @@ export default function BalancePage() {
           <div className="card-body">
             <div className="flex items-center gap-3 text-slate-500">
               <FileBarChart size={20} />
-              <span className="text-sm">У спільноті немає приміщень для звіту.</span>
+              <span className="text-sm">
+                {isPersonal
+                  ? 'Для вашого приміщення поки що немає нарахувань і платежів.'
+                  : 'У спільноті немає приміщень для звіту.'}
+              </span>
             </div>
           </div>
         </div>
@@ -189,7 +271,7 @@ export default function BalancePage() {
                   </tr>
                 );
               })}
-              {totals && (
+              {totals && rows!.length > 1 && (
                 <tr className="bg-slate-50 font-semibold text-slate-900">
                   <td className="px-5 py-3" colSpan={2}>Разом</td>
                   <td className="px-5 py-3 text-right tabular-nums">

@@ -68,7 +68,7 @@ export default function MembersList() {
     void reload();
     (async () => {
       try {
-        setUnits(await listUnits(communityId));
+        setUnits(await listUnits(communityId, { includeInactive: true }));
       } catch {
         // приміщення опційно — додавання учасника працює і без вибору юніта
       }

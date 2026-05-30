@@ -45,8 +45,14 @@ export default function UnitsList() {
   const reload = useCallback(async () => {
     try {
       setError(null);
-      const data = await listUnits(communityId);
-      setUnits([...data].sort((a, b) => a.number.localeCompare(b.number, 'uk', { numeric: true })));
+      const data = await listUnits(communityId, { includeInactive: true });
+      setUnits(
+        [...data].sort((a, b) => {
+          // активні зверху, далі за номером
+          if (a.is_active !== b.is_active) return a.is_active ? -1 : 1;
+          return a.number.localeCompare(b.number, 'uk', { numeric: true });
+        }),
+      );
     } catch (err) {
       setError(extractErrorMessage(err, 'Не вдалося завантажити приміщення'));
     }
@@ -121,8 +127,9 @@ export default function UnitsList() {
         <div>
           <h2 className="text-2xl font-semibold text-slate-900">Приміщення</h2>
           <p className="text-slate-600 mt-1 text-sm">
-            Активні приміщення спільноти. Деактивовані зберігаються в історії
-            нарахувань і платежів, але не виводяться у цьому списку.
+            Усі приміщення спільноти. Деактивовані позначаються міткою — вони
+            зберігаються в історії нарахувань та оплат і доступні для погашення
+            боргу через реєстрацію платежу.
           </p>
         </div>
         {canManage && (
@@ -230,8 +237,18 @@ function UnitsTable({ units, canManage, onEdit, onDelete }: UnitsTableProps) {
         </thead>
         <tbody className="divide-y divide-slate-100">
           {units.map((u) => (
-            <tr key={u.id} className="hover:bg-slate-50">
-              <td className="px-5 py-3 font-medium text-slate-900 tabular-nums">{u.number}</td>
+            <tr
+              key={u.id}
+              className={`hover:bg-slate-50 ${u.is_active ? '' : 'opacity-60'}`}
+            >
+              <td className="px-5 py-3 font-medium text-slate-900 tabular-nums">
+                {u.number}
+                {!u.is_active && (
+                  <span className="badge badge-slate ml-2 align-middle">
+                    Деактивовано
+                  </span>
+                )}
+              </td>
               <td className="px-5 py-3 text-slate-700">{unitTypeLabel(u.type)}</td>
               <td className="px-5 py-3 text-right text-slate-700 tabular-nums">
                 {formatNumber(u.area)}
@@ -241,16 +258,20 @@ function UnitsTable({ units, canManage, onEdit, onDelete }: UnitsTableProps) {
               </td>
               {canManage && (
                 <td className="px-5 py-3 text-right">
-                  <div className="inline-flex gap-1">
-                    <Button variant="ghost" size="sm" onClick={() => onEdit(u)}>
-                      <Pencil size={14} />
-                      Редагувати
-                    </Button>
-                    <Button variant="ghost" size="sm" onClick={() => onDelete(u)}>
-                      <Trash2 size={14} />
-                      Видалити
-                    </Button>
-                  </div>
+                  {u.is_active ? (
+                    <div className="inline-flex gap-1">
+                      <Button variant="ghost" size="sm" onClick={() => onEdit(u)}>
+                        <Pencil size={14} />
+                        Редагувати
+                      </Button>
+                      <Button variant="ghost" size="sm" onClick={() => onDelete(u)}>
+                        <Trash2 size={14} />
+                        Видалити
+                      </Button>
+                    </div>
+                  ) : (
+                    <span className="text-xs text-slate-400">—</span>
+                  )}
                 </td>
               )}
             </tr>

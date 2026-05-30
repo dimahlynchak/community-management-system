@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 import { ChevronLeft, ListChecks, Plus, Receipt } from 'lucide-react';
 import {
   createPayment,
+  getMyPayments,
   listPaymentAllocations,
   listPayments,
 } from '../../api/finances';
@@ -18,9 +19,10 @@ import type {
 import { useAuth } from '../../auth/useAuth';
 import { hasPermission } from '../../utils/permissions';
 import { formatDate, formatMoney } from '../../utils/format';
-import { unitTypeLabel } from '../../data/unitTypes';
+import { formatUnitLabel } from '../../data/unitTypes';
 import Alert from '../../components/Alert';
 import Button from '../../components/Button';
+import Input from '../../components/Input';
 import Spinner from '../../components/Spinner';
 import EmptyState from '../../components/EmptyState';
 import Modal from '../../components/Modal';
@@ -28,27 +30,52 @@ import PaymentFormModal, {
   PaymentFormData,
 } from '../../components/PaymentFormModal';
 
+type UnitFilter = number | 'all' | '';
+
 export default function PaymentsPage() {
   const { id } = useParams<{ id: string }>();
   const communityId = Number(id);
   const { user } = useAuth();
 
   const [units, setUnits] = useState<Unit[]>([]);
-  const [unitId, setUnitId] = useState<number | ''>('');
+  const [unitId, setUnitId] = useState<UnitFilter>('');
   const [payments, setPayments] = useState<Payment[] | null>(null);
+  const [periodFilter, setPeriodFilter] = useState('');
   const [myRole, setMyRole] = useState<RoleName | null>(null);
+  const [myUnitId, setMyUnitId] = useState<number | null>(null);
+  const [membershipLoaded, setMembershipLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [allocationsFor, setAllocationsFor] = useState<Payment | null>(null);
   const [allocations, setAllocations] = useState<PaymentAllocation[] | null>(null);
 
-  const loadPayments = useCallback(
-    async (uid: number) => {
+  const canCreate = hasPermission(myRole, 'payments:create');
+  const canReadAll = hasPermission(myRole, 'payments:read');
+  const canReadOwn = hasPermission(myRole, 'own_charges:read');
+  const isPersonal = membershipLoaded && !canReadAll && canReadOwn;
+
+  const loadAdminPayments = useCallback(
+    async (filter: UnitFilter, allUnits: Unit[]) => {
       try {
-        const data = await listPayments(communityId, uid);
-        setPayments(
-          [...data].sort((a, b) => b.payment_date.localeCompare(a.payment_date)),
-        );
+        if (filter === 'all') {
+          if (allUnits.length === 0) {
+            setPayments([]);
+            return;
+          }
+          const lists = await Promise.all(
+            allUnits.map((u) => listPayments(communityId, u.id)),
+          );
+          setPayments(
+            lists
+              .flat()
+              .sort((a, b) => b.payment_date.localeCompare(a.payment_date)),
+          );
+        } else if (filter !== '' && Number.isFinite(filter)) {
+          const data = await listPayments(communityId, filter);
+          setPayments(
+            [...data].sort((a, b) => b.payment_date.localeCompare(a.payment_date)),
+          );
+        }
       } catch (err) {
         setError(extractErrorMessage(err, 'Не вдалося завантажити платежі'));
         setPayments([]);
@@ -57,6 +84,18 @@ export default function PaymentsPage() {
     [communityId],
   );
 
+  const loadMyPayments = useCallback(async () => {
+    try {
+      const data = await getMyPayments(communityId);
+      setPayments(
+        [...data].sort((a, b) => b.payment_date.localeCompare(a.payment_date)),
+      );
+    } catch (err) {
+      setError(extractErrorMessage(err, 'Не вдалося завантажити ваші платежі'));
+      setPayments([]);
+    }
+  }, [communityId]);
+
   useEffect(() => {
     if (!Number.isFinite(communityId) || communityId <= 0) {
       setError('Невірний ідентифікатор спільноти');
@@ -64,42 +103,72 @@ export default function PaymentsPage() {
     }
     (async () => {
       try {
-        const u = await listUnits(communityId);
-        setUnits(u);
-        if (u.length > 0) {
-          setUnitId(u[0].id);
-        }
-      } catch (err) {
-        setError(extractErrorMessage(err, 'Не вдалося завантажити приміщення'));
-      }
-      try {
         const members = await listMembers(communityId);
         const me = members.find((m) => m.user_id === user?.id);
         setMyRole((me?.role.name as RoleName | undefined) ?? null);
+        setMyUnitId(me?.unit_id ?? null);
       } catch {
-        // без ролі кнопки створення не з'являться
+        // без ролі personal не визначиться, адмін не побачить кнопки
+      } finally {
+        setMembershipLoaded(true);
       }
     })();
   }, [communityId, user?.id]);
 
   useEffect(() => {
-    if (unitId !== '' && Number.isFinite(unitId)) {
-      setPayments(null);
-      void loadPayments(unitId);
+    if (!membershipLoaded) return;
+    if (isPersonal) {
+      if (myUnitId !== null) {
+        setPayments(null);
+        void loadMyPayments();
+      } else {
+        setPayments([]);
+      }
+      return;
     }
-  }, [unitId, loadPayments]);
+    if (!canReadAll) return;
+    (async () => {
+      try {
+        const u = await listUnits(communityId, { includeInactive: true });
+        setUnits(u);
+        if (u.length > 0) {
+          setUnitId('all');
+        }
+      } catch (err) {
+        setError(extractErrorMessage(err, 'Не вдалося завантажити приміщення'));
+      }
+    })();
+  }, [
+    membershipLoaded,
+    isPersonal,
+    canReadAll,
+    myUnitId,
+    communityId,
+    loadMyPayments,
+  ]);
 
-  const canCreate = hasPermission(myRole, 'payments:create');
-  const canRead = hasPermission(myRole, 'payments:read');
+  useEffect(() => {
+    if (isPersonal) return;
+    if (!canReadAll) return;
+    if (unitId === '') return;
+    setPayments(null);
+    void loadAdminPayments(unitId, units);
+  }, [isPersonal, canReadAll, unitId, units, loadAdminPayments]);
 
   const unitsById = useMemo(() => new Map(units.map((u) => [u.id, u])), [units]);
+
+  const filteredPayments = useMemo(() => {
+    if (payments === null) return null;
+    if (!periodFilter) return payments;
+    return payments.filter((p) => p.payment_date.startsWith(`${periodFilter}-`));
+  }, [payments, periodFilter]);
 
   const handleCreate = async (data: PaymentFormData) => {
     try {
       await createPayment(communityId, data);
       setCreateOpen(false);
-      if (unitId === data.unit_id && Number.isFinite(unitId)) {
-        await loadPayments(data.unit_id);
+      if (unitId === 'all' || unitId === data.unit_id) {
+        await loadAdminPayments(unitId, units);
       } else {
         setUnitId(data.unit_id);
       }
@@ -120,7 +189,15 @@ export default function PaymentsPage() {
     }
   };
 
-  if (!canRead) {
+  if (!membershipLoaded) {
+    return (
+      <div className="flex justify-center py-12">
+        <Spinner label="Завантаження…" />
+      </div>
+    );
+  }
+
+  if (!canReadAll && !canReadOwn) {
     return (
       <div className="space-y-4">
         <Link
@@ -131,12 +208,14 @@ export default function PaymentsPage() {
           До спільноти
         </Link>
         <Alert tone="error" title="Доступ обмежено">
-          Перегляд платежів доступний бухгалтеру та голові правління. Для перегляду
-          власних оплат скористайтеся розділом «Особистий кабінет».
+          У вас немає дозволу переглядати платежі цієї спільноти.
         </Alert>
       </div>
     );
   }
+
+  const showUnitColumn = !isPersonal && unitId === 'all';
+  const personalUnit = isPersonal && myUnitId !== null ? unitsById.get(myUnitId) : null;
 
   return (
     <div className="space-y-6">
@@ -152,8 +231,9 @@ export default function PaymentsPage() {
         <div>
           <h2 className="text-2xl font-semibold text-slate-900">Платежі</h2>
           <p className="text-slate-600 mt-1 text-sm">
-            Реєстрація оплат від мешканців. Платіж автоматично розподіляється FIFO
-            на найстаріші непогашені нарахування цього приміщення.
+            {isPersonal
+              ? 'Ваші оплати за приміщенням. Розподіл на нарахування виконується FIFO.'
+              : 'Реєстрація оплат від мешканців. Платіж автоматично розподіляється FIFO на найстаріші непогашені нарахування цього приміщення.'}
           </p>
         </div>
         {canCreate && (
@@ -170,100 +250,179 @@ export default function PaymentsPage() {
         </Alert>
       )}
 
-      <section className="card">
-        <div className="card-header">
-          <div className="flex items-center gap-2">
-            <Receipt className="text-brand-600" size={18} />
-            <h3 className="text-base font-semibold text-slate-900">
-              Платежі за приміщенням
-            </h3>
-          </div>
-        </div>
-        <div className="card-body space-y-4">
-          <div className="space-y-1 max-w-sm">
-            <label htmlFor="unit_select" className="block text-sm font-medium text-slate-700">
-              Приміщення
-            </label>
-            <select
-              id="unit_select"
-              value={unitId === '' ? '' : String(unitId)}
-              onChange={(e) =>
-                setUnitId(e.target.value === '' ? '' : Number(e.target.value))
-              }
-              className="w-full px-3 py-2 text-sm rounded-md border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent"
-            >
-              <option value="">— оберіть приміщення —</option>
-              {units.map((u) => (
-                <option key={u.id} value={u.id}>
-                  №{u.number} · {unitTypeLabel(u.type)}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {unitId === '' ? (
-            <p className="text-sm text-slate-500">Оберіть приміщення, щоб переглянути платежі.</p>
-          ) : payments === null ? (
-            <Spinner label="Завантаження…" />
-          ) : payments.length === 0 ? (
+      {isPersonal && myUnitId === null ? (
+        <div className="card">
+          <div className="card-body">
             <EmptyState
               icon={Receipt}
-              title="Платежів немає"
-              description="Для цього приміщення не зареєстровано жодного платежу."
-              action={
-                canCreate ? (
-                  <Button onClick={() => setCreateOpen(true)}>
-                    <Plus size={16} />
-                    Зареєструвати платіж
-                  </Button>
-                ) : null
-              }
+              title="Приміщення ще не призначено"
+              description="До вашого членства в цій спільноті не привʼязане жодне приміщення. Зверніться до голови правління, щоб вас закріпили за квартирою або приміщенням."
             />
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
-                  <tr>
-                    <th className="text-left px-3 py-2 font-medium">Дата</th>
-                    <th className="text-right px-3 py-2 font-medium">Сума</th>
-                    <th className="text-left px-3 py-2 font-medium">Призначення</th>
-                    <th className="text-right px-3 py-2 font-medium">Розподіл</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {payments.map((p) => (
-                    <tr key={p.id} className="hover:bg-slate-50">
-                      <td className="px-3 py-2 text-slate-700 tabular-nums">
-                        {formatDate(p.payment_date)}
-                      </td>
-                      <td className="px-3 py-2 text-right tabular-nums font-medium text-slate-900">
-                        {formatMoney(p.amount)}
-                      </td>
-                      <td className="px-3 py-2 text-slate-700">
-                        {p.description ?? <span className="text-slate-400">—</span>}
-                      </td>
-                      <td className="px-3 py-2 text-right">
-                        <Button variant="ghost" size="sm" onClick={() => void openAllocations(p)}>
-                          <ListChecks size={14} />
-                          Деталі
-                        </Button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+          </div>
         </div>
-      </section>
+      ) : (
+        <section className="card">
+          <div className="card-header">
+            <div className="flex items-center gap-2">
+              <Receipt className="text-brand-600" size={18} />
+              <h3 className="text-base font-semibold text-slate-900">
+                {isPersonal
+                  ? personalUnit
+                    ? `Платежі по приміщенню №${personalUnit.number}`
+                    : 'Ваші платежі'
+                  : 'Платежі за приміщенням'}
+              </h3>
+            </div>
+          </div>
+          <div className="card-body space-y-4">
+            <div className="flex flex-wrap items-end gap-3">
+              {!isPersonal && (
+                <div className="space-y-1 w-64">
+                  <label
+                    htmlFor="unit_select"
+                    className="block text-sm font-medium text-slate-700"
+                  >
+                    Приміщення
+                  </label>
+                  <select
+                    id="unit_select"
+                    value={unitId === '' ? '' : String(unitId)}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      if (v === '') setUnitId('');
+                      else if (v === 'all') setUnitId('all');
+                      else setUnitId(Number(v));
+                    }}
+                    className="w-full px-3 py-2 text-sm rounded-md border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent"
+                  >
+                    <option value="">— оберіть приміщення —</option>
+                    <option value="all">Усі приміщення</option>
+                    {units.map((u) => (
+                      <option key={u.id} value={u.id}>
+                        {formatUnitLabel(u)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              <div className="w-56">
+                <Input
+                  id="period_filter"
+                  label="Фільтр за періодом"
+                  value={periodFilter}
+                  onChange={(e) => setPeriodFilter(e.target.value)}
+                  placeholder="YYYY-MM (порожньо = всі)"
+                  pattern="\d{4}-(0[1-9]|1[0-2])"
+                  hint=" "
+                />
+              </div>
+              {periodFilter && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setPeriodFilter('')}
+                >
+                  Скинути період
+                </Button>
+              )}
+            </div>
 
-      <PaymentFormModal
-        open={createOpen}
-        onClose={() => setCreateOpen(false)}
-        units={units}
-        defaultUnitId={unitId === '' ? null : unitId}
-        onSubmit={handleCreate}
-      />
+            {!isPersonal && unitId === '' ? (
+              <p className="text-sm text-slate-500">
+                Оберіть приміщення (або «Усі»), щоб переглянути платежі.
+              </p>
+            ) : filteredPayments === null ? (
+              <Spinner label="Завантаження…" />
+            ) : filteredPayments.length === 0 ? (
+              <EmptyState
+                icon={Receipt}
+                title="Платежів немає"
+                description={
+                  periodFilter
+                    ? 'За обраний період платежів не знайдено. Спробуйте інший період або скиньте фільтр.'
+                    : isPersonal
+                    ? 'Для вашого приміщення ще не зареєстровано жодного платежу.'
+                    : 'Для обраного приміщення не зареєстровано жодного платежу.'
+                }
+                action={
+                  canCreate ? (
+                    <Button onClick={() => setCreateOpen(true)}>
+                      <Plus size={16} />
+                      Зареєструвати платіж
+                    </Button>
+                  ) : null
+                }
+              />
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                    <tr>
+                      <th className="text-left px-3 py-2 font-medium">Дата</th>
+                      {showUnitColumn && (
+                        <th className="text-left px-3 py-2 font-medium">Приміщення</th>
+                      )}
+                      <th className="text-right px-3 py-2 font-medium">Сума</th>
+                      <th className="text-left px-3 py-2 font-medium">Призначення</th>
+                      <th className="text-right px-3 py-2 font-medium">Розподіл</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {filteredPayments.map((p) => {
+                      const u = unitsById.get(p.unit_id);
+                      return (
+                        <tr key={p.id} className="hover:bg-slate-50">
+                          <td className="px-3 py-2 text-slate-700 tabular-nums">
+                            {formatDate(p.payment_date)}
+                          </td>
+                          {showUnitColumn && (
+                            <td className="px-3 py-2 text-slate-900 font-medium">
+                              {u ? `№${u.number}` : `unit ${p.unit_id}`}
+                              {u && !u.is_active && (
+                                <span className="ml-2 text-xs text-slate-500 font-normal">
+                                  (деактивовано)
+                                </span>
+                              )}
+                            </td>
+                          )}
+                          <td className="px-3 py-2 text-right tabular-nums font-medium text-slate-900">
+                            {formatMoney(p.amount)}
+                          </td>
+                          <td className="px-3 py-2 text-slate-700">
+                            {p.description ?? <span className="text-slate-400">—</span>}
+                          </td>
+                          <td className="px-3 py-2 text-right">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => void openAllocations(p)}
+                            >
+                              <ListChecks size={14} />
+                              Деталі
+                            </Button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </section>
+      )}
+
+      {canCreate && (
+        <PaymentFormModal
+          open={createOpen}
+          onClose={() => setCreateOpen(false)}
+          units={units}
+          defaultUnitId={
+            typeof unitId === 'number' ? unitId : units[0]?.id ?? null
+          }
+          onSubmit={handleCreate}
+        />
+      )}
 
       <Modal
         open={allocationsFor !== null}

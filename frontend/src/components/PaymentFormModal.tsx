@@ -5,7 +5,7 @@ import Input from './Input';
 import TextArea from './TextArea';
 import Alert from './Alert';
 import { todayISO } from '../utils/format';
-import { unitTypeLabel } from '../data/unitTypes';
+import { formatUnitLabel } from '../data/unitTypes';
 import type { Unit } from '../types/api';
 
 export interface PaymentFormData {
@@ -97,10 +97,14 @@ export default function PaymentFormModal({
             <option value="">— оберіть —</option>
             {units.map((u) => (
               <option key={u.id} value={u.id}>
-                №{u.number} · {unitTypeLabel(u.type)}
+                {formatUnitLabel(u)}
               </option>
             ))}
           </select>
+          <p className="text-xs text-slate-500">
+            Деактивовані приміщення показано з позначкою — оплату по них можна
+            реєструвати для погашення історичного боргу.
+          </p>
         </div>
         <Input
           id="amount"

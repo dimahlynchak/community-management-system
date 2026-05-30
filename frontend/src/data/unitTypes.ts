@@ -21,3 +21,16 @@ export function unitTypeLabel(value: string | null | undefined): string {
 }
 
 export const DEFAULT_UNIT_TYPE = 'flat';
+
+export interface UnitLike {
+  number: string;
+  type: string;
+  is_active?: boolean;
+}
+
+/** Формує лейбл «№123 · Квартира» з опційним суфіксом «(деактивовано)»,
+ *  щоб у випадаючих списках чітко відрізнити soft-deleted юніти. */
+export function formatUnitLabel(u: UnitLike): string {
+  const base = `№${u.number} · ${unitTypeLabel(u.type)}`;
+  return u.is_active === false ? `${base} (деактивовано)` : base;
+}

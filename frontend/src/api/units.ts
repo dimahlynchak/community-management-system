@@ -1,8 +1,15 @@
 import { apiClient } from './client';
 import type { Unit, UnitCreate, UnitUpdate } from '../types/api';
 
-export async function listUnits(communityId: number): Promise<Unit[]> {
-  const res = await apiClient.get<Unit[]>(`/communities/${communityId}/units`);
+export async function listUnits(
+  communityId: number,
+  options?: { includeInactive?: boolean },
+): Promise<Unit[]> {
+  const params = options?.includeInactive ? { include_inactive: true } : {};
+  const res = await apiClient.get<Unit[]>(
+    `/communities/${communityId}/units`,
+    { params },
+  );
   return res.data;
 }
 

@@ -49,6 +49,7 @@ export interface Unit {
   type: UnitType;
   area: string;
   floor: number | null;
+  is_active: boolean;
   created_at: string;
   updated_at: string;
 }

@@ -141,11 +141,14 @@ def create_community_unit(
 @router.get("/{community_id}/units", response_model=list[UnitResponse])
 def list_community_units(
     community_id: int,
+    include_inactive: bool = False,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_membership),
 ):
-    """Отримати всі приміщення спільноти."""
-    return get_units_by_community(db, community_id)
+    """Отримати приміщення спільноти. За замовчуванням — лише активні.
+    З ?include_inactive=true — також деактивовані (soft-deleted), потрібно
+    для фільтрів історії й призначення ролей колишнім мешканцям."""
+    return get_units_by_community(db, community_id, include_inactive=include_inactive)
 
 
 @router.get("/{community_id}/units/{unit_id}", response_model=UnitResponse)

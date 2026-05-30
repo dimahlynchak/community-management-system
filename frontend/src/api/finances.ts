@@ -113,6 +113,42 @@ export async function exportBalance(
   return res.data as Blob;
 }
 
+// --- Personal endpoints (мешканець / технічний працівник) ---
+
+export async function getMyCharges(communityId: number): Promise<Charge[]> {
+  const res = await apiClient.get<Charge[]>(
+    `/communities/${communityId}/my-charges`,
+  );
+  return res.data;
+}
+
+export async function getMyPayments(communityId: number): Promise<Payment[]> {
+  const res = await apiClient.get<Payment[]>(
+    `/communities/${communityId}/my-payments`,
+  );
+  return res.data;
+}
+
+export async function getMyBalance(
+  communityId: number,
+): Promise<UnitBalanceResponse> {
+  const res = await apiClient.get<UnitBalanceResponse>(
+    `/communities/${communityId}/my-balance`,
+  );
+  return res.data;
+}
+
+export async function exportMyBalance(
+  communityId: number,
+  format: 'xlsx' | 'pdf',
+): Promise<Blob> {
+  const res = await apiClient.get(
+    `/communities/${communityId}/my-balance/export`,
+    { params: { format }, responseType: 'blob' },
+  );
+  return res.data as Blob;
+}
+
 export async function calculatePenalties(
   communityId: number,
   rate?: number | null,

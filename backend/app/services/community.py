@@ -48,15 +48,19 @@ def create_unit(db: Session, community_id: int, data: UnitCreate) -> Unit:
     return unit
 
 
-def get_units_by_community(db: Session, community_id: int) -> list[Unit]:
-    """Перелік активних приміщень спільноти. Деактивовані (is_active=false)
-    залишаються у БД для збереження історії нарахувань/оплат, але у списку не
-    видаються."""
-    return (
-        db.query(Unit)
-        .filter(Unit.community_id == community_id, Unit.is_active == True)
-        .all()
-    )
+def get_units_by_community(
+    db: Session, community_id: int, include_inactive: bool = False,
+) -> list[Unit]:
+    """Перелік приміщень спільноти. За замовчуванням повертає лише активні.
+
+    З include_inactive=True повертає також деактивовані (soft-deleted) —
+    потрібно для фільтрів у переглядах нарахувань/платежів/балансу та для
+    модалок реєстрації платежу й призначення ролі, де треба бачити історичні
+    приміщення і працювати з їхнім накопиченим боргом."""
+    query = db.query(Unit).filter(Unit.community_id == community_id)
+    if not include_inactive:
+        query = query.filter(Unit.is_active == True)
+    return query.all()
 
 
 def get_unit(db: Session, unit_id: int) -> Unit | None:
