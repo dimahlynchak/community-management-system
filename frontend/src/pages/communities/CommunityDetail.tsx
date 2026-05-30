@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
+  AlertTriangle,
   Building2,
   ChevronLeft,
   ClipboardList,
@@ -8,6 +9,8 @@ import {
   Home,
   Megaphone,
   Pencil,
+  PieChart,
+  Receipt,
   ScrollText,
   Trash2,
   Users,
@@ -177,8 +180,11 @@ export default function CommunityDetail() {
             <SectionTile to={`/communities/${communityId}/units`} icon={Home} label="Приміщення" />
             <SectionTile to={`/communities/${communityId}/members`} icon={Users} label="Учасники" />
             <SectionTile to={`/communities/${communityId}/announcements`} icon={Megaphone} label="Оголошення" />
-            <SectionTile to="" icon={Wallet} label="Нарахування" disabled />
-            <SectionTile to="" icon={FileBarChart} label="Боргова відомість" disabled />
+            <SectionTile to={`/communities/${communityId}/charges`} icon={Wallet} label="Нарахування" />
+            <SectionTile to={`/communities/${communityId}/payments`} icon={Receipt} label="Платежі" />
+            <SectionTile to={`/communities/${communityId}/balance`} icon={FileBarChart} label="Боргова відомість" />
+            <SectionTile to={`/communities/${communityId}/penalties`} icon={AlertTriangle} label="Пеня" />
+            <SectionTile to={`/communities/${communityId}/budget`} icon={PieChart} label="Бюджет" />
             <SectionTile to="" icon={ScrollText} label="Журнал аудиту" disabled />
           </div>
         </div>

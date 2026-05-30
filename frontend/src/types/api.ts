@@ -156,6 +156,7 @@ export interface Charge {
 export interface ChargeCreate {
   charge_type_id: number;
   period: string;
+  unit_ids?: number[] | null;
 }
 
 export interface Payment {
