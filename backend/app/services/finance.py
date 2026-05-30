@@ -160,18 +160,26 @@ def get_charges_by_community(
     period: str | None = None,
     unit_id: int | None = None,
 ) -> list[Charge]:
-    query = db.query(Charge).join(Unit).filter(Unit.community_id == community_id)
+    query = (
+        db.query(Charge)
+        .join(Unit)
+        .filter(Unit.community_id == community_id)
+        .order_by(Charge.period.desc(), Charge.id.desc())
+    )
     if period:
         query = query.filter(Charge.period == period)
-    if unit_id is not None:
-        query = query.filter(Charge.unit_id == unit_id)
     return query.all()
 
 
 # --- Payments ---
 
 def _allocate_payment_fifo(db: Session, payment: Payment) -> None:
-    """FIFO: allocate payment's unallocated remainder to oldest outstanding charges."""
+    """FIFO: allocate payment's unallocated remainder to oldest outstanding charges.
+
+    Charges цього юніта блокуються `FOR UPDATE` до кінця транзакції: два
+    паралельні платежі на той самий юніт могли б обидва прочитати однаковий
+    outstanding і обидва зробити allocation, видавши allocation > charge.amount.
+    З FOR UPDATE другий запит чекає першого і бачить уже оновлений залишок."""
     already_paid = (
         db.query(func.sum(PaymentAllocation.amount))
         .filter(PaymentAllocation.payment_id == payment.id)
@@ -184,6 +192,7 @@ def _allocate_payment_fifo(db: Session, payment: Payment) -> None:
         db.query(Charge)
         .filter(Charge.unit_id == payment.unit_id)
         .order_by(Charge.period, Charge.created_at)
+        .with_for_update()
         .all()
     )
     for charge in charges:
@@ -335,7 +344,14 @@ def delete_payment(db: Session, payment: Payment) -> int:
 
 
 def get_payments_by_unit(db: Session, unit_id: int) -> list[Payment]:
-    return db.query(Payment).filter(Payment.unit_id == unit_id).all()
+    # Найновіші платежі — зверху. Без сортування Postgres повертає рядки в
+    # довільному порядку, що ламає UX (пагінацію, експорти).
+    return (
+        db.query(Payment)
+        .filter(Payment.unit_id == unit_id)
+        .order_by(Payment.payment_date.desc(), Payment.id.desc())
+        .all()
+    )
 
 
 def get_allocations_by_payment(db: Session, payment_id: int) -> list[PaymentAllocation]:

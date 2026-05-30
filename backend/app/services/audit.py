@@ -2,9 +2,29 @@ import hashlib
 import json
 from datetime import datetime, timezone
 
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.models.audit import AuditLog
+
+
+# Стабільний ключ advisory-lock для серіалізації паралельних записів у
+# журнал аудиту. PostgreSQL pg_advisory_xact_lock тримає блокування до
+# кінця транзакції — після COMMIT/ROLLBACK воно автоматично знімається.
+_AUDIT_CHAIN_LOCK_KEY = 0xA0D17C4A1
+
+
+def _acquire_chain_lock(db: Session) -> None:
+    """Серіалізує get_last_hash + INSERT між паралельними транзакціями.
+    Без цього при першому в житті записі (порожня таблиця) обидві транзакції
+    бачили б previous_hash='0'*64 і обидві б закомітились — другий запис
+    ламав би ланцюг (бо previous_hash ≠ hash першого). SELECT FOR UPDATE
+    у get_last_hash порожній рядок не блокує."""
+    bind = db.get_bind() if hasattr(db, "get_bind") else None
+    dialect = bind.dialect.name if bind is not None else ""
+    if dialect == "postgresql":
+        db.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": _AUDIT_CHAIN_LOCK_KEY})
+    # Для sqlite/інших — журнал однопоточний у тестах, лок не потрібен.
 
 
 def _compute_hash(data: str, previous_hash: str) -> str:
@@ -58,6 +78,7 @@ def create_audit_entry(
     ip_address: str | None = None,
 ) -> AuditLog:
     """Створює запис в журналі аудиту з hash chain."""
+    _acquire_chain_lock(db)
     previous_hash = get_last_hash(db)
     # Явний Python-timestamp — той самий іде і в hash, і в БД (без розбіжності server_default).
     # Naive UTC: щоб verify_audit_chain рахувала той самий hash зі значення з БД,
@@ -92,20 +113,19 @@ def create_audit_entry(
 
 
 def verify_audit_chain(db: Session) -> dict:
-    """Перевіряє цілісність hash chain: ланцюг previous_hash + перерахунок hash."""
-    entries = db.query(AuditLog).order_by(AuditLog.id).all()
-
-    if not entries:
-        return {"valid": True, "total": 0}
-
+    """Перевіряє цілісність hash chain. Потокова обробка через yield_per
+    дозволяє верифікувати десятки/сотні тисяч записів без OOM — рядки
+    надходять батчами з курсора, не матеріалізуються в один список."""
     expected_previous = "0" * 64
-    broken_at = None
+    broken_at: int | None = None
+    total = 0
 
-    for entry in entries:
+    query = db.query(AuditLog).order_by(AuditLog.id).yield_per(1000)
+    for entry in query:
+        total += 1
         if entry.previous_hash != expected_previous:
             broken_at = entry.id
             break
-        # Перераховуємо hash із збережених даних
         recomputed = _compute_hash(
             _build_data_str(
                 entry.timestamp,
@@ -125,6 +145,6 @@ def verify_audit_chain(db: Session) -> dict:
 
     return {
         "valid": broken_at is None,
-        "total": len(entries),
+        "total": total,
         "broken_at_id": broken_at,
     }

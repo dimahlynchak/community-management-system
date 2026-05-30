@@ -13,9 +13,11 @@ from app.schemas.user import (
 )
 from app.services.auth import (
     register_user, authenticate_user, create_tokens,
+    cleanup_expired_refresh_tokens,
     store_refresh_token, get_valid_refresh_token, revoke_refresh_token,
     change_user_password, update_user_profile,
 )
+import random
 from app.services.audit import create_audit_entry
 
 
@@ -37,7 +39,11 @@ def _set_refresh_cookie(response: Response, token: str) -> None:
 
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
-def register(data: UserCreate, db: Session = Depends(get_db)):
+def register(
+    data: UserCreate,
+    request: Request,
+    db: Session = Depends(get_db),
+):
     """Реєстрація нового користувача."""
     existing = db.query(User).filter(User.email == data.email).first()
     if existing:
@@ -46,6 +52,14 @@ def register(data: UserCreate, db: Session = Depends(get_db)):
             detail="Email already registered",
         )
     user = register_user(db, data)
+    # community_id=None бо при реєстрації юзер ще не у жодній спільноті;
+    # action='CREATE', resource='user' для forensics — корисно знати, коли і з
+    # якого IP створено акаунт.
+    create_audit_entry(
+        db, user.id, None, "CREATE", "user", user.id,
+        details={"email": user.email, "full_name": user.full_name},
+        ip_address=get_client_ip(request),
+    )
     return user
 
 
@@ -77,6 +91,15 @@ def login(
         db, user.id, None, "LOGIN", "user", user.id,
         ip_address=get_client_ip(request),
     )
+
+    # Опортуністичне прибирання прострочених/відкликаних refresh-токенів:
+    # запускаємо приблизно раз на 20 логінів. Так таблиця refresh_tokens не
+    # накопичує мертві рядки без окремого cron-скрипту.
+    if random.randint(0, 19) == 0:
+        try:
+            cleanup_expired_refresh_tokens(db)
+        except Exception:
+            db.rollback()  # очищення опційне, поразка не має ламати логін
 
     return TokenResponse(access_token=tokens["access_token"])
 
@@ -111,6 +134,11 @@ def refresh(response: Response, request: Request, db: Session = Depends(get_db))
     tokens = create_tokens(user.id)
     store_refresh_token(db, user.id, tokens["refresh_token"])
     _set_refresh_cookie(response, tokens["refresh_token"])
+    create_audit_entry(
+        db, user.id, None, "UPDATE", "auth", user.id,
+        details={"event": "refresh"},
+        ip_address=get_client_ip(request),
+    )
     return TokenResponse(access_token=tokens["access_token"])
 
 
