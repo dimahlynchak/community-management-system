@@ -73,6 +73,26 @@ class PasswordResetResponse(BaseModel):
     new_password: str
 
 
+class UserMinimalResponse(BaseModel):
+    """Мінімальний публічний профіль для відображення у списку учасників."""
+    id: int
+    email: str
+    full_name: str
+    phone: str | None
+
+    model_config = {"from_attributes": True}
+
+
+class UnitMinimalResponse(BaseModel):
+    """Мінімальні дані приміщення для відображення поряд із роллю учасника."""
+    id: int
+    number: str
+    type: str
+    is_active: bool
+
+    model_config = {"from_attributes": True}
+
+
 class UserRoleResponse(BaseModel):
     id: int
     user_id: int
@@ -81,6 +101,8 @@ class UserRoleResponse(BaseModel):
     unit_id: int | None
     assigned_at: datetime
     role: RoleResponse
+    user: UserMinimalResponse
+    unit: UnitMinimalResponse | None = None
 
     model_config = {"from_attributes": True}
 

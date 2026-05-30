@@ -75,6 +75,20 @@ export interface Role {
   display_name: string;
 }
 
+export interface UserMinimalResponse {
+  id: number;
+  email: string;
+  full_name: string;
+  phone: string | null;
+}
+
+export interface UnitMinimalResponse {
+  id: number;
+  number: string;
+  type: string;
+  is_active: boolean;
+}
+
 export interface UserRoleResponse {
   id: number;
   user_id: number;
@@ -83,12 +97,32 @@ export interface UserRoleResponse {
   unit_id: number | null;
   assigned_at: string;
   role: Role;
+  user: UserMinimalResponse;
+  unit: UnitMinimalResponse | null;
 }
 
 export interface AssignRoleRequest {
   user_id: number;
   role_name: RoleName;
   unit_id?: number | null;
+}
+
+export interface MemberLookupResponse {
+  id: number;
+  email: string;
+  full_name: string;
+}
+
+export interface CreateMemberWithUserResponse {
+  membership: UserRoleResponse;
+  user_id: number;
+  email: string;
+  generated_password: string;
+}
+
+export interface PasswordResetResponse {
+  user_id: number;
+  new_password: string;
 }
 
 export type CalculationMethod = 'per_sqm' | 'fixed' | 'share';

@@ -175,8 +175,8 @@ export default function CommunityDetail() {
           </p>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
             <SectionTile to={`/communities/${communityId}/units`} icon={Home} label="Приміщення" />
-            <SectionTile to="" icon={Users} label="Учасники" disabled />
-            <SectionTile to="" icon={Megaphone} label="Оголошення" disabled />
+            <SectionTile to={`/communities/${communityId}/members`} icon={Users} label="Учасники" />
+            <SectionTile to={`/communities/${communityId}/announcements`} icon={Megaphone} label="Оголошення" />
             <SectionTile to="" icon={Wallet} label="Нарахування" disabled />
             <SectionTile to="" icon={FileBarChart} label="Боргова відомість" disabled />
             <SectionTile to="" icon={ScrollText} label="Журнал аудиту" disabled />
