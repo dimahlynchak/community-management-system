@@ -185,7 +185,12 @@ export default function CommunityDetail() {
             <SectionTile to={`/communities/${communityId}/balance`} icon={FileBarChart} label="Боргова відомість" />
             <SectionTile to={`/communities/${communityId}/penalties`} icon={AlertTriangle} label="Пеня" />
             <SectionTile to={`/communities/${communityId}/budget`} icon={PieChart} label="Бюджет" />
-            <SectionTile to="" icon={ScrollText} label="Журнал аудиту" disabled />
+            <SectionTile
+              to={`/communities/${communityId}/audit`}
+              icon={ScrollText}
+              label="Журнал аудиту"
+              disabled={!hasPermission(myRole, 'audit:read')}
+            />
           </div>
         </div>
       </section>
