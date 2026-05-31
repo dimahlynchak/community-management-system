@@ -263,3 +263,9 @@ dist-ssr
 # tsc -b output for node-side config
 vite.config.js
 vite.config.d.ts
+
+
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
